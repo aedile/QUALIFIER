@@ -286,8 +286,12 @@ static inline uint16_t *sub_ram_word(uint32_t a)
     if (a < 0xb000) return &pp_view16[(a - 0xa000) >> 1];
     return 0;
 }
+static const uint16_t open_bus_page[0x80] = { [0 ... 0x7f] = 0xffff };
+static uint16_t *wpage_sub[0x100];            /* write page table (same for both CPUs; special pages NULL) */
 static void sub_pages_init(void)
 {
+    for (int pg = 0x80; pg < 0xb0; pg++) wpage_sub[pg] = sub_ram_word((uint32_t)pg << 8);
+    z8k_wpage = wpage_sub;
     for (int c = 0; c < 2; c++) {
         for (int i = 0; i < 0x4000; i++) {
             const uint8_t *rom = c ? R.rom_sub2 : R.rom_sub1;
@@ -299,6 +303,7 @@ static void sub_pages_init(void)
         for (int pg = 0x90; pg < 0x98; pg++) rpage_sub[c][pg] = pp_road16 + ((pg - 0x90) << 7);
         for (int pg = 0x98; pg < 0xa0; pg++) rpage_sub[c][pg] = pp_alpha16 + ((pg - 0x98) << 7);
         for (int pg = 0xa0; pg < 0xb0; pg++) rpage_sub[c][pg] = pp_view16 + ((pg - 0xa0) << 7);
+        for (int pg = 0xb0; pg < 0x100; pg++) rpage_sub[c][pg] = open_bus_page;
     }
     z8k_rpage = rpage_sub[0];
 }
@@ -382,6 +387,13 @@ static void run_z80(int32_t cycles)
           prev_pc = pc; })
     if (z80.IFF & IFF_HALT) { idle_cycles[0] += cycles; return; }
     if (z80.PC.W >= 0x0a5f && z80.PC.W <= 0x0a63 && !z80_irq_pending) { idle_cycles[0] += cycles; return; }   /* waits for the IRQ tick */
+    /* Main loop (00B1: call 0278 / jr 00B1) polls the sub-CPU mailbox: it only does work when
+     * byte 4010 == 73 and byte 4018 == 0, otherwise it just rewrites 4018 with the value it already
+     * has. Nothing in this slice can change those bytes but the other CPUs, which run between slices. */
+    if ((z80.PC.W == 0x00b1 || z80.PC.W == 0x00b4) && !z80_irq_pending) {
+        uint8_t st = RdZ80(0x4010), busy = RdZ80(0x4018);
+        if ((st != 0x73) ? (busy == 0) : (busy != 0)) { idle_cycles[0] += cycles; return; }
+    }
     z80.IPeriod = cycles; z80.ICount = cycles;
     RunZ80(&z80);
     int32_t over = cycles - z80.ICount;
@@ -423,12 +435,13 @@ void pp_run_frame(void)
             n06_nmi_countdown -= PP_CYCLES_PER_LINE;
             if (n06_nmi_countdown < 0) { n06_nmi_countdown += N06_NMI_PERIOD; IntZ80(&z80, INT_NMI); DBG(pp_dbg_nmi++;) }
         }
+        if (scanline % PP_SLICE_LINES) continue;
         uint64_t t0 = TNOW();
-        run_z80(PP_CYCLES_PER_LINE);
+        run_z80(PP_CYCLES_PER_LINE * PP_SLICE_LINES);
         uint64_t t1 = TNOW();
-        run_sub(0, PP_CYCLES_PER_LINE);
+        run_sub(0, PP_CYCLES_PER_LINE * PP_SLICE_LINES);
         uint64_t t2 = TNOW();
-        run_sub(1, PP_CYCLES_PER_LINE);
+        run_sub(1, PP_CYCLES_PER_LINE * PP_SLICE_LINES);
         uint64_t t3 = TNOW();
         stats.cpu_us[0] += t1 - t0; stats.cpu_us[1] += t2 - t1; stats.cpu_us[2] += t3 - t2;
     }

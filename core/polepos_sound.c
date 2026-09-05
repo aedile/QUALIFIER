@@ -46,27 +46,35 @@ static void wsg_render(int16_t *buf, int samples, int rate)
     }
 }
 
-/* ---- biquad (MAME filter2_context) ---- */
-typedef struct { double a1, a2, b0, b1, b2, x0, x1, x2, y0, y1, y2; } biquad_t;
+/* ---- biquad (MAME filter2_context), fixed point: coefficients Q28, signal Q20 ----
+ * The ESP32-C6 has no FPU, so per-sample work is integer only; the setup math (once per
+ * sample-rate change) may use doubles. */
+#define BQ_COEF 28
+#define SIG_Q   20
+typedef struct { int32_t a1, a2, b0, b1, b2; int32_t x1, x2, y1, y2; } biquad_t;
 static void biquad_setup(biquad_t *f, int type, double fc, double d, double gain, int rate)
 {
     double two_over_T = 2.0 * rate, two_over_T2 = two_over_T * two_over_T;
     double w = rate * 2.0 * tan(M_PI * fc / rate), w2 = w * w;
     double den = two_over_T2 + d * w * two_over_T + w2;
-    f->a1 = 2.0 * (-two_over_T2 + w2) / den;
-    f->a2 = (two_over_T2 - d * w * two_over_T + w2) / den;
-    if (type == 0) { f->b0 = f->b2 = w2 / den; f->b1 = 2.0 * f->b0; }                 /* lowpass */
-    else if (type == 2) { f->b0 = d * w * two_over_T / den; f->b1 = 0; f->b2 = -f->b0; } /* bandpass */
-    else { f->b0 = f->b2 = two_over_T2 / den; f->b1 = -2.0 * f->b0; }                    /* highpass */
-    f->b0 *= gain; f->b1 *= gain; f->b2 *= gain;
-    f->x0 = f->x1 = f->x2 = f->y0 = f->y1 = f->y2 = 0;
+    double a1 = 2.0 * (-two_over_T2 + w2) / den;
+    double a2 = (two_over_T2 - d * w * two_over_T + w2) / den;
+    double b0, b1, b2;
+    if (type == 0) { b0 = b2 = w2 / den; b1 = 2.0 * b0; }                       /* lowpass */
+    else if (type == 2) { b0 = d * w * two_over_T / den; b1 = 0; b2 = -b0; }    /* bandpass */
+    else { b0 = b2 = two_over_T2 / den; b1 = -2.0 * b0; }                        /* highpass */
+    b0 *= gain; b1 *= gain; b2 *= gain;
+    const double k = (double)(1 << BQ_COEF);
+    f->a1 = (int32_t)(a1 * k); f->a2 = (int32_t)(a2 * k);
+    f->b0 = (int32_t)(b0 * k); f->b1 = (int32_t)(b1 * k); f->b2 = (int32_t)(b2 * k);
+    f->x1 = f->x2 = f->y1 = f->y2 = 0;
 }
-static inline double biquad_step(biquad_t *f, double x)
+static inline int32_t biquad_step(biquad_t *f, int32_t x)
 {
-    f->x0 = x;
-    f->y0 = -f->a1 * f->y1 - f->a2 * f->y2 + f->b0 * f->x0 + f->b1 * f->x1 + f->b2 * f->x2;
-    f->x2 = f->x1; f->x1 = f->x0; f->y2 = f->y1; f->y1 = f->y0;
-    return f->y0;
+    int64_t acc = -(int64_t)f->a1 * f->y1 - (int64_t)f->a2 * f->y2 + (int64_t)f->b0 * x + (int64_t)f->b1 * f->x1 + (int64_t)f->b2 * f->x2;
+    int32_t y = (int32_t)(acc >> BQ_COEF);
+    f->x2 = f->x1; f->x1 = x; f->y2 = f->y1; f->y1 = y;
+    return y;
 }
 static void opamp_bandpass(biquad_t *f, double r1, double r2, double r3, double c1, double c2, int rate)
 {
@@ -87,7 +95,9 @@ static const double volume_table[8] = {
     (1.0/(1.0/1000+1.0/250)*2 + 2200 + 2200) / 10000, (1.0/(1.0/1000+1.0/250) + 2200 + 1000 + 2200) / 10000,
     (4700 + 1.0/(1.0/1000+1.0/250)*2 + 2200) / 10000, (4700 + 1.0/(1.0/1000+1.0/250) + 1000 + 2200) / 10000,
     (4700 + 2200 + 1.0/(1.0/1000+1.0/250) + 2200) / 10000, (4700 + 2200 + 1000 + 2200) / 10000 };
-static const double r_filt_out[3] = { 4700, 7500, 10000 };
+/* per-filter output weights: r_filt_total / 2 / r_filt_out[k] * 20000, with r_filt_total = 4700 || 7500 || 10000 */
+static const int32_t eng_out_w[3] = { 4752, 2978, 2234 };
+static int32_t eng_xtab[8][256];      /* (3.4/255 * sample - 2) * volume[slot], Q20 */
 void pp_engine_lsb(uint8_t d) { eng_lsb = d & 62; eng_enable = d & 1; }
 void pp_engine_msb(uint8_t d) { eng_msb = d & 63; }
 static void engine_setup(int rate)
@@ -96,6 +106,9 @@ static void engine_setup(int rate)
     opamp_bandpass(&eng_f[0], 220e3, 33e3, 390e3, 0.01e-6, 0.01e-6, rate);
     opamp_bandpass(&eng_f[1], 150e3, 22e3, 330e3, 0.0047e-6, 0.0047e-6, rate);
     biquad_setup(&eng_f[2], 1, 950, 1.0 / 0.707, 1, rate);
+    for (int slot = 0; slot < 8; slot++)
+        for (int v = 0; v < 256; v++)
+            eng_xtab[slot][v] = (int32_t)((3.4 / 255 * v - 2) * volume_table[slot] * (1 << SIG_Q));
 }
 static void engine_render(int16_t *buf, int samples, int rate)
 {
@@ -104,19 +117,18 @@ static void engine_render(int16_t *buf, int samples, int rate)
     uint32_t clock = (uint32_t)(((uint64_t)(3072000 / 16) * ((eng_msb + 1) * 64 + eng_lsb + 1)) / (64 * 64));
     uint32_t step = (uint32_t)(((uint64_t)clock << 12) / (uint32_t)rate);
     int slot = (eng_msb >> 3) & 7;
-    double volume = volume_table[slot];
+    const int32_t *xtab = eng_xtab[slot];
     const uint8_t *base = R->engine + slot * 0x800;
-    double r_filt_total = 1.0 / (1.0 / 4700 + 1.0 / 7500 + 1.0 / 10000);
+    const int32_t ymax = (int32_t)(1.5 * (1 << SIG_Q)), ymin = -2 * (1 << SIG_Q);
     for (int i = 0; i < samples; i++) {
-        double x = (3.4 / 255 * base[(eng_pos >> 12) & 0x7ff] - 2) * volume;
-        double i_total = 0;
+        int32_t x = xtab[base[(eng_pos >> 12) & 0x7ff]];
+        int64_t out = 0;
         for (int k = 0; k < 3; k++) {
-            double y = biquad_step(&eng_f[k], x);
-            if (y > 1.5) y = 1.5; if (y < -2) y = -2;
-            i_total += y / r_filt_out[k];
+            int32_t y = biquad_step(&eng_f[k], x);
+            if (y > ymax) y = ymax; if (y < ymin) y = ymin;
+            out += (int64_t)y * eng_out_w[k];
         }
-        i_total *= r_filt_total / 2;
-        int32_t v = buf[i] + (int32_t)(i_total * 20000.0);
+        int32_t v = buf[i] + (int32_t)(out >> SIG_Q);
         if (v > 32767) v = 32767; if (v < -32768) v = -32768;
         buf[i] = (int16_t)v;
         eng_pos += step;
@@ -124,7 +136,7 @@ static void engine_render(int16_t *buf, int samples, int rate)
 }
 
 /* ---- 52XX speech samples ---- */
-static int n52_start, n52_end, n52_length, n52_pos; static double n52_cycle, n52_step; static int n52_rate;
+static int n52_start, n52_end, n52_length, n52_pos; static uint32_t n52_cycle, n52_step; static int n52_rate;   /* cycle/step: 16.16 */
 static biquad_t n52_hp, n52_lp;
 void pp_n52_write(uint8_t d)
 {
@@ -139,26 +151,26 @@ void pp_n52_write(uint8_t d)
 static void n52_render(int16_t *buf, int samples, int rate)
 {
     if (rate != n52_rate) {
-        n52_rate = rate; n52_step = (1536000.0 / 384) / rate;
+        n52_rate = rate; n52_step = (uint32_t)(((uint64_t)(1536000 / 384) << 16) / (uint32_t)rate);
         biquad_setup(&n52_hp, 1, 100, 1.0 / 0.3, 1, rate);
         biquad_setup(&n52_lp, 0, 1200, 1.0 / 0.8, 0.5, rate);
     }
     if (n52_start >= n52_end) return;
     for (int i = 0; i < samples; i++) {
         n52_cycle += n52_step;
-        if (n52_cycle >= 1) { int whole = (int)n52_cycle; n52_pos += whole; n52_cycle -= whole; }
+        n52_pos += n52_cycle >> 16; n52_cycle &= 0xffff;
         if (n52_pos > n52_length) { n52_start = n52_end = n52_length = n52_pos = 0; return; }
         int rom_pos = n52_start + (n52_pos >> 1);
         int s4 = (((n52_pos & 1) ? R->voice[rom_pos] >> 4 : R->voice[rom_pos]) & 0x0f) - 8;
-        double y = biquad_step(&n52_lp, biquad_step(&n52_hp, (double)s4));
-        int32_t v = buf[i] + (int32_t)(y * 0x0fff);
+        int32_t y = biquad_step(&n52_lp, biquad_step(&n52_hp, s4 << SIG_Q));
+        int32_t v = buf[i] + (int32_t)(((int64_t)y * 0x0fff) >> SIG_Q);
         if (v > 32767) v = 32767; if (v < -32768) v = -32768;
         buf[i] = (int16_t)v;
     }
 }
 
-/* ---- 54XX noise (high level) ---- */
-typedef struct { int active; float env, decay, lp, alpha, gain; } noise_t;
+/* ---- 54XX noise (high level), Q15 envelopes ---- */
+typedef struct { int active; int32_t env, decay, lp, alpha, gain; } noise_t;   /* env/decay/alpha Q15, gain Q8, lp = sample scale */
 static noise_t nz[3]; static int n54_param_left; static int n54_pending[3]; static uint32_t rng = 0x12345678;
 void pp_n54_write(uint8_t d)
 {
@@ -169,33 +181,35 @@ void pp_n54_write(uint8_t d)
         case 3: case 4: n54_param_left = 4; break;
         case 5: n54_pending[2] = 1; break;
         case 6: n54_param_left = 5; break;
-        case 7: nz[2].gain = (d & 0x0f) / 15.0f; break;
+        case 7: nz[2].gain = ((d & 0x0f) * 256) / 15; break;
         default: break;
     }
 }
-static void trigger(int w, float decay_s, float cutoff, float gain, int rate)
+static void trigger(int w, int decay_ms, int cutoff_hz, int32_t gain_q8, int rate)
 {
-    nz[w].active = 1; nz[w].env = 1.0f; nz[w].decay = 1.0f - 1.0f / (decay_s * rate);
-    nz[w].alpha = 1.0f - (float)(1.0 / (1.0 + rate / (6.2832 * cutoff))); nz[w].gain = gain;
+    nz[w].active = 1; nz[w].env = 32767;
+    nz[w].decay = 32768 - (int32_t)((32768LL * 1000) / ((int64_t)decay_ms * rate));
+    nz[w].alpha = (int32_t)((32768LL * rate) / ((int64_t)(6.2832 * cutoff_hz) + rate));
+    nz[w].gain = gain_q8;
 }
 static void n54_render(int16_t *buf, int samples, int rate)
 {
-    if (n54_pending[0]) { trigger(0, 0.8f, 700.0f, 0.9f, rate); n54_pending[0] = 0; }
-    if (n54_pending[1]) { trigger(1, 0.3f, 2500.0f, 0.6f, rate); n54_pending[1] = 0; }
-    if (n54_pending[2]) { trigger(2, 1.5f, 1200.0f, nz[2].gain > 0 ? nz[2].gain : 0.5f, rate); n54_pending[2] = 0; }
+    if (n54_pending[0]) { trigger(0, 800, 700, 230, rate); n54_pending[0] = 0; }
+    if (n54_pending[1]) { trigger(1, 300, 2500, 154, rate); n54_pending[1] = 0; }
+    if (n54_pending[2]) { trigger(2, 1500, 1200, nz[2].gain > 0 ? nz[2].gain : 128, rate); n54_pending[2] = 0; }
     if (!nz[0].active && !nz[1].active && !nz[2].active) return;
     for (int i = 0; i < samples; i++) {
         rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
-        float white = ((int32_t)(rng & 0xffff) - 32768) / 32768.0f, v = 0;
+        int32_t white = (int32_t)(rng & 0xffff) - 32768, v = 0;
         for (int k = 0; k < 3; k++) {
             noise_t *n = &nz[k];
             if (!n->active) continue;
-            n->lp += n->alpha * (white - n->lp);
-            v += n->lp * n->env * n->gain;
-            n->env *= n->decay;
-            if (n->env < 0.002f) n->active = 0;
+            n->lp += (n->alpha * (white - n->lp)) >> 15;
+            v += (((n->lp * n->env) >> 15) * n->gain) >> 8;
+            n->env = (n->env * n->decay) >> 15;
+            if (n->env < 66) n->active = 0;
         }
-        int32_t s = buf[i] + (int32_t)(v * 12000.0f);
+        int32_t s = buf[i] + ((v * 12000) >> 15);
         if (s > 32767) s = 32767; if (s < -32768) s = -32768;
         buf[i] = (int16_t)s;
     }

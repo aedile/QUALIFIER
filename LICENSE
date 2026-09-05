@@ -1,0 +1,39 @@
+QUALIFIER is released under the Zero-Clause BSD license (0BSD): no
+attribution, no notice preservation, no conditions.
+
+That covers the code written for this project: everything under main/, host/,
+components/audio_hal, components/display, components/imu, the generator
+tools/gen_z8002.py and tools/convert_roms.py, and the files core/polepos.c,
+core/polepos.h, core/polepos_internal.h, core/polepos_video.c,
+core/polepos_sound.c.
+
+Two things carry their own terms, listed in THIRD_PARTY_NOTICES.md:
+
+  * core/z80/ is Marat Fayzullin's portable Z80 emulator. It is free for
+    non-commercial use only and may not be distributed commercially. A build
+    of this project therefore inherits that restriction.
+  * core/z8000/z8002.c is a mechanical translation of MAME's Z8000 CPU core,
+    and the board, video and sound models are written from MAME's Pole
+    Position driver. MAME is BSD-3-Clause, which requires the copyright notice
+    to be kept.
+
+The Pole Position ROM images are not part of this project and are not
+licensed by it. They remain the property of their copyright holders.
+
+----------------------------------------------------------------------------
+
+Zero-Clause BSD
+===============
+
+Copyright (C) 2026 Jesse Castro
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.

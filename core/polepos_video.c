@@ -7,6 +7,7 @@
 static const pp_roms_t *R;
 static uint16_t palette[PP_COLORS];
 static uint16_t vpos_mod[256];
+static uint8_t char_uniform[256], char_value[256];   /* text characters whose 64 pixels are all the same value */
 #define P (R->proms)
 
 static inline uint16_t rgb565(int r, int g, int b) { return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)); }
@@ -19,6 +20,12 @@ void pp_video_init(const pp_roms_t *r)
         palette[i] = rgb565(prom_rgb(P[0x000 + i]), prom_rgb(P[0x100 + i]), prom_rgb(P[0x200 + i]));
     for (int i = 0; i < 256; i++)
         vpos_mod[i] = (uint16_t)(P[0x500 + i] + (P[0x600 + i] << 4) + (P[0x700 + i] << 8));
+    for (int c = 0; c < 256; c++) {
+        const uint8_t *src = R->chars + c * 64;
+        int uni = 1;
+        for (int i = 1; i < 64 && uni; i++) uni = (src[i] == src[0]);
+        char_uniform[c] = (uint8_t)uni; char_value[c] = src[0];
+    }
 }
 const uint16_t *pp_palette(void) { return palette; }
 
@@ -149,8 +156,14 @@ static void draw_text(uint8_t *fb)
             uint8_t pens[4]; int opaque = 0;
             for (int i = 0; i < 4; i++) { uint8_t v = lut[i] & 0x0f; pens[i] = (v == 15) ? 0xff : (uint8_t)(bank + v); opaque |= (v != 15); }
             if (!opaque) continue;
-            const uint8_t *src = R->chars + code * 64;
             uint8_t *dst = fb + (trow * 8 - 16) * PP_FB_W + tcol * 8;
+            if (code < 256 && char_uniform[code]) {          /* blank or solid: one pen for the whole cell */
+                uint8_t t = pens[char_value[code]];
+                if (t == 0xff) continue;
+                for (int y = 0; y < 8; y++, dst += PP_FB_W) memset(dst, t, 8);
+                continue;
+            }
+            const uint8_t *src = R->chars + code * 64;
             for (int y = 0; y < 8; y++) {
                 for (int x = 0; x < 8; x++) {
                     uint8_t t = pens[src[y * 8 + x]];
@@ -162,11 +175,26 @@ static void draw_text(uint8_t *fb)
     }
 }
 
+#ifdef PP_VIDEO_PROFILE
+uint32_t pp_video_prof[5];
+uint32_t (*pp_video_clock)(void);
+#define VP(i) do { uint32_t _n = pp_video_clock(); pp_video_prof[i] += _n - _t; _t = _n; } while (0)
+#else
+#define VP(i)
+#endif
 void pp_video_render(uint8_t *fb)
 {
+#ifdef PP_VIDEO_PROFILE
+    uint32_t _t = pp_video_clock();
+#endif
     memset(fb, 0, PP_FB_W * PP_FB_H);
+    VP(0);
     draw_background(fb);
+    VP(1);
     draw_road(fb);
+    VP(2);
     draw_sprites(fb);
+    VP(3);
     draw_text(fb);
+    VP(4);
 }

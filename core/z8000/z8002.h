@@ -30,8 +30,10 @@ uint8_t z8k_in(uint16_t port);
 void z8k_out(uint16_t port, uint8_t data);
 
 extern uint32_t z8k_invalid_count;    /* invalid opcodes executed (diagnostic) */
-/* page table (256 entries of native-endian word pointers, NULL = use z8k_rw) for the CPU being run */
+/* read page table (256 entries of native-endian word pointers, every page mapped) for the CPU being run */
 extern const uint16_t *const *z8k_rpage;
+/* write page table for RAM (NULL = use z8k_ww/z8k_wb); may be shared by all CPUs */
+extern uint16_t *const *z8k_wpage;
 /* While z8k_run() executes, the CPU state lives in an internal copy; bus callbacks that
  * change the running CPU's interrupt lines must use this instead of the caller's struct. */
 z8k_t *z8k_live(void);

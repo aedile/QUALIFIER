@@ -11,6 +11,10 @@
 #ifndef Z8K_HOT
 #define Z8K_HOT            /* placement attribute for hot handlers (IRAM_ATTR on the ESP32) */
 #endif
+#ifndef Z8K_DATA
+#define Z8K_DATA           /* placement attribute for the dispatch tables (DRAM_ATTR on the ESP32: the
+                              compiler would otherwise move these never-written statics into flash rodata) */
+#endif
 
 static z8k_t Zs;               /* the CPU being run; z8k_run copies the caller's state in and out */
 #define Z (&Zs)
@@ -20,23 +24,44 @@ uint32_t z8k_op_count[600];
 const char *z8k_op_name(int i);
 #endif
 
-static uint8_t z8000_zsp[256];
+typedef void (*opcode_func_t)(void);
+static Z8K_DATA uint8_t z8000_zsp[256];
 /* opcode -> table index, as 16-entry blocks (deduplicated) so it lives in RAM; see the end of this file */
 static uint16_t z8000_exec_idx[0x1000];
 static uint16_t z8000_exec_blk[];
+static opcode_func_t z8000_exec_fn[];
+static uint16_t z8000_exec_cyc[];
 #define Z8000_EXEC(op) (z8000_exec_blk[(z8000_exec_idx[(op) >> 4] << 4) | ((op) & 15)])
 #ifdef Z8K_PROFILE
 extern uint32_t z8k_op_count[600];
 #endif
 
-/* Fast memory path: the machine publishes a 256-entry page table of native-endian
- * 16-bit words for the active CPU (ROM and RAM); NULL pages fall back to z8k_rw(). */
+/* Fast memory path: the machine publishes 256-entry page tables of native-endian
+ * 16-bit words for the active CPU. The read table must map every page (filler for unmapped);
+ * NULL write pages fall back to z8k_ww()/z8k_wb(). */
 const uint16_t *const *z8k_rpage;
+uint16_t *const *z8k_wpage;
+/* Reads always go through the table (the machine maps every page, unmapped ones to a filler page)
+ * so that the opcode handlers are leaf functions. */
 static inline uint16_t z8k_rw_fast(uint32_t a)
 {
-    const uint16_t *p = z8k_rpage[(a >> 8) & 0xff];
-    if (p) return p[(a & 0xff) >> 1];
-    return z8k_rw(a);
+    return z8k_rpage[(a >> 8) & 0xff][(a & 0xff) >> 1];
+}
+static inline uint8_t z8k_rb_fast(uint32_t a)
+{
+    uint16_t w = z8k_rpage[(a >> 8) & 0xff][(a & 0xff) >> 1];
+    return (a & 1) ? (uint8_t)w : (uint8_t)(w >> 8);
+}
+static inline void z8k_ww_fast(uint32_t a, uint16_t v)
+{
+    uint16_t *p = z8k_wpage[(a >> 8) & 0xff];
+    if (p) p[(a & 0xff) >> 1] = v; else z8k_ww(a, v);
+}
+static inline void z8k_wb_fast(uint32_t a, uint8_t v)
+{
+    uint16_t *p = z8k_wpage[(a >> 8) & 0xff];
+    if (p) { uint16_t *w = &p[(a & 0xff) >> 1]; *w = (a & 1) ? (uint16_t)((*w & 0xff00) | v) : (uint16_t)((*w & 0x00ff) | (v << 8)); }
+    else z8k_wb(a, v);
 }
 
 #define BYTE_XOR_BE(a)  ((a) ^ 1)
@@ -153,12 +178,12 @@ static inline uint16_t z8k_rw_fast(uint32_t a)
 #define ASSERT_LINE 1
 
 /* bus: the space argument from MAME is ignored (Z8002 has one address space here) */
-#define RDMEM_B(sp, a)    z8k_rb((a) & 0xffff)
+#define RDMEM_B(sp, a)    z8k_rb_fast((a) & 0xffff)
 #define RDMEM_W(sp, a)    z8k_rw_fast((a) & 0xfffe)
 #define RDMEM_L(sp, a)    (((uint32_t)z8k_rw_fast((a) & 0xfffe) << 16) | z8k_rw_fast(((a) + 2) & 0xfffe))
-#define WRMEM_B(sp, a, v) z8k_wb((a) & 0xffff, (uint8_t)(v))
-#define WRMEM_W(sp, a, v) z8k_ww((a) & 0xfffe, (uint16_t)(v))
-#define WRMEM_L(sp, a, v) do { z8k_ww((a) & 0xfffe, (uint16_t)((v) >> 16)); z8k_ww(((a) + 2) & 0xfffe, (uint16_t)(v)); } while (0)
+#define WRMEM_B(sp, a, v) z8k_wb_fast((a) & 0xffff, (uint8_t)(v))
+#define WRMEM_W(sp, a, v) z8k_ww_fast((a) & 0xfffe, (uint16_t)(v))
+#define WRMEM_L(sp, a, v) do { z8k_ww_fast((a) & 0xfffe, (uint16_t)((v) >> 16)); z8k_ww_fast(((a) + 2) & 0xfffe, (uint16_t)(v)); } while (0)
 #define RDPORT_B(m, a)    z8k_in((a))
 #define RDPORT_W(m, a)    ((uint16_t)((z8k_in((a)) << 8) | z8k_in((a) + 1)))
 #define WRPORT_B(m, a, v) z8k_out((a), (uint8_t)(v))
@@ -170,14 +195,13 @@ static inline uint32_t addr_sub(uint32_t addr, uint32_t s) { return (addr & 0xff
 static inline uint16_t RDOP(void) { uint16_t r = z8k_rw_fast(Z->pc & 0xfffe); Z->pc += 2; return r; }
 static inline uint32_t get_operand(int opnum)
 {
+    if (opnum == 0) return Z->op[0];       /* always fetched by the run loop */
     if (!(Z->op_valid & (1 << opnum))) { Z->op[opnum] = z8k_rw_fast(Z->pc & 0xfffe); Z->pc += 2; Z->op_valid |= (1 << opnum); }
     return Z->op[opnum];
 }
 #define get_addr_operand(o) get_operand(o)
 #define get_raw_addr_operand(o) get_operand(o)
 
-typedef void (*opcode_func)(void);
-typedef struct { int beg, end, step; int size, cycles; opcode_func opcode; } Z8000_init;
 static void zinvalid(void);
 static void Z00_0000_dddd_imm8(void);
 static void Z00_ssN0_dddd(void);
@@ -7578,541 +7602,6 @@ static Z8K_HOT void ZF_dddd_1dsp7()
 	}
 }
 
-// license:BSD-3-Clause
-// copyright-holders:Juergen Buchmueller,Ernesto Corvi
-/*****************************************************************************
- *
- *   z8000tbl.inc
- *   Portable Z8000(2) emulator
- *   Opcode table (including mnemonics) and initialization
- *
- *****************************************************************************/
-
-static Z8000_init table[] = {
-	{ 0x0000, 0xffff,  1, 1,   4, zinvalid },
-
-	{ 0x0000, 0x000f,  1, 2,   7, Z00_0000_dddd_imm8 },
-	{ 0x0010, 0x00ff,  1, 1,   7, Z00_ssN0_dddd },
-	{ 0x0100, 0x010f,  1, 2,   7, Z01_0000_dddd_imm16 },
-	{ 0x0110, 0x01ff,  1, 1,   7, Z01_ssN0_dddd },
-	{ 0x0200, 0x020f,  1, 2,   7, Z02_0000_dddd_imm8 },
-	{ 0x0210, 0x02ff,  1, 1,   7, Z02_ssN0_dddd },
-	{ 0x0300, 0x030f,  1, 2,   7, Z03_0000_dddd_imm16 },
-	{ 0x0310, 0x03ff,  1, 1,   7, Z03_ssN0_dddd },
-	{ 0x0400, 0x040f,  1, 2,   7, Z04_0000_dddd_imm8 },
-	{ 0x0410, 0x04ff,  1, 1,   7, Z04_ssN0_dddd },
-	{ 0x0500, 0x050f,  1, 2,   7, Z05_0000_dddd_imm16 },
-	{ 0x0510, 0x05ff,  1, 1,   7, Z05_ssN0_dddd },
-	{ 0x0600, 0x060f,  1, 2,   7, Z06_0000_dddd_imm8 },
-	{ 0x0610, 0x06ff,  1, 1,   7, Z06_ssN0_dddd },
-	{ 0x0700, 0x070f,  1, 2,   7, Z07_0000_dddd_imm16 },
-	{ 0x0710, 0x07ff,  1, 1,   7, Z07_ssN0_dddd },
-	{ 0x0800, 0x080f,  1, 2,   7, Z08_0000_dddd_imm8 },
-	{ 0x0810, 0x08ff,  1, 1,   7, Z08_ssN0_dddd },
-	{ 0x0900, 0x090f,  1, 2,   7, Z09_0000_dddd_imm16 },
-	{ 0x0910, 0x09ff,  1, 1,   7, Z09_ssN0_dddd },
-	{ 0x0a00, 0x0a0f,  1, 2,   7, Z0A_0000_dddd_imm8 },
-	{ 0x0a10, 0x0aff,  1, 1,   7, Z0A_ssN0_dddd },
-	{ 0x0b00, 0x0b0f,  1, 2,   7, Z0B_0000_dddd_imm16 },
-	{ 0x0b10, 0x0bff,  1, 1,   7, Z0B_ssN0_dddd },
-	{ 0x0c10, 0x0cf0, 16, 1,  12, Z0C_ddN0_0000 },
-	{ 0x0c11, 0x0cf1, 16, 2,  11, Z0C_ddN0_0001_imm8 },
-	{ 0x0c12, 0x0cf2, 16, 1,  12, Z0C_ddN0_0010 },
-	{ 0x0c14, 0x0cf4, 16, 1,   8, Z0C_ddN0_0100 },
-	{ 0x0c15, 0x0cf5, 16, 2,   7, Z0C_ddN0_0101_imm8 },
-	{ 0x0c16, 0x0cf6, 16, 1,  11, Z0C_ddN0_0110 },
-	{ 0x0c18, 0x0cf8, 16, 1,   8, Z0C_ddN0_1000 },
-	{ 0x0d10, 0x0df0, 16, 1,  12, Z0D_ddN0_0000 },
-	{ 0x0d11, 0x0df1, 16, 2,  11, Z0D_ddN0_0001_imm16 },
-	{ 0x0d12, 0x0df2, 16, 1,  12, Z0D_ddN0_0010 },
-	{ 0x0d14, 0x0df4, 16, 1,   8, Z0D_ddN0_0100 },
-	{ 0x0d15, 0x0df5, 16, 2,  11, Z0D_ddN0_0101_imm16 }, /* fix cycles ld IR,IM */
-	{ 0x0d16, 0x0df6, 16, 1,  11, Z0D_ddN0_0110 },
-	{ 0x0d18, 0x0df8, 16, 1,   8, Z0D_ddN0_1000 },
-	{ 0x0d19, 0x0df9, 16, 2,  12, Z0D_ddN0_1001_imm16 },
-	{ 0x0e00, 0x0eff,  1, 1,  10, Z0E_imm8 },
-	{ 0x0f00, 0x0fff,  1, 1,  10, Z0F_imm8 },
-	{ 0x1000, 0x100f,  1, 3,  14, Z10_0000_dddd_imm32 },
-	{ 0x1010, 0x10ff,  1, 1,  14, Z10_ssN0_dddd },
-	{ 0x1111, 0x11ff,  1, 1,  20, Z11_ddN0_ssN0 },
-	{ 0x1200, 0x120f,  1, 3,  14, Z12_0000_dddd_imm32 },
-	{ 0x1210, 0x12ff,  1, 1,  14, Z12_ssN0_dddd },
-	{ 0x1311, 0x13ff,  1, 1,  13, Z13_ddN0_ssN0 },
-	{ 0x1400, 0x140f,  1, 3,  11, Z14_0000_dddd_imm32 },
-	{ 0x1410, 0x14ff,  1, 1,  11, Z14_ssN0_dddd },
-	{ 0x1511, 0x15ff,  1, 1,  19, Z15_ssN0_ddN0 },
-	{ 0x1600, 0x160f,  1, 3,  14, Z16_0000_dddd_imm32 },
-	{ 0x1610, 0x16ff,  1, 1,  14, Z16_ssN0_dddd },
-	{ 0x1711, 0x17ff,  1, 1,  12, Z17_ssN0_ddN0 },
-	{ 0x1800, 0x180f,  1, 1, 282, Z18_00N0_dddd_imm32 },
-	{ 0x1810, 0x18ff,  1, 1, 282, Z18_ssN0_dddd },
-	{ 0x1900, 0x190f,  1, 2,  70, Z19_0000_dddd_imm16 },
-	{ 0x1910, 0x19ff,  1, 1,  70, Z19_ssN0_dddd },
-	{ 0x1a00, 0x1a0f,  1, 3, 744, Z1A_0000_dddd_imm32 },
-	{ 0x1a10, 0x1aff,  1, 1, 744, Z1A_ssN0_dddd },
-	{ 0x1b00, 0x1b0f,  1, 2, 107, Z1B_0000_dddd_imm16 },
-	{ 0x1b10, 0x1bff,  1, 1, 107, Z1B_ssN0_dddd },
-	{ 0x1c11, 0x1cf1, 16, 2,  11, Z1C_ssN0_0001_0000_dddd_0000_nmin1 },
-	{ 0x1c18, 0x1cf8, 16, 1,  13, Z1C_ddN0_1000 },
-	{ 0x1c19, 0x1cf9, 16, 2,  11, Z1C_ddN0_1001_0000_ssss_0000_nmin1 },
-	{ 0x1d10, 0x1dff,  1, 1,  11, Z1D_ddN0_ssss },
-	{ 0x1e10, 0x1eff,  1, 1,  10, Z1E_ddN0_cccc },
-	{ 0x1f10, 0x1ff0, 16, 1,  10, Z1F_ddN0_0000 },
-	{ 0x2000, 0x200f,  1, 2,   7, Z20_0000_dddd_imm8 },
-	{ 0x2010, 0x20ff,  1, 1,   7, Z20_ssN0_dddd },
-	{ 0x2100, 0x210f,  1, 2,   7, Z21_0000_dddd_imm16 },
-	{ 0x2110, 0x21ff,  1, 1,   7, Z21_ssN0_dddd },
-	{ 0x2200, 0x220f,  1, 2,  10, Z22_0000_ssss_0000_dddd_0000_0000 },
-	{ 0x2210, 0x22ff,  1, 1,  11, Z22_ddN0_imm4 },
-	{ 0x2300, 0x230f,  1, 2,  10, Z23_0000_ssss_0000_dddd_0000_0000 },
-	{ 0x2310, 0x23ff,  1, 1,  11, Z23_ddN0_imm4 },
-	{ 0x2400, 0x240f,  1, 2,  10, Z24_0000_ssss_0000_dddd_0000_0000 },
-	{ 0x2410, 0x24ff,  1, 1,  11, Z24_ddN0_imm4 },
-	{ 0x2500, 0x250f,  1, 2,  10, Z25_0000_ssss_0000_dddd_0000_0000 },
-	{ 0x2510, 0x25ff,  1, 1,  11, Z25_ddN0_imm4 },
-	{ 0x2600, 0x260f,  1, 2,  10, Z26_0000_ssss_0000_dddd_0000_0000 },
-	{ 0x2610, 0x26ff,  1, 1,   8, Z26_ddN0_imm4 },
-	{ 0x2700, 0x270f,  1, 2,  10, Z27_0000_ssss_0000_dddd_0000_0000 },
-	{ 0x2710, 0x27ff,  1, 1,   8, Z27_ddN0_imm4 },
-	{ 0x2810, 0x28ff,  1, 1,  11, Z28_ddN0_imm4m1 },
-	{ 0x2910, 0x29ff,  1, 1,  11, Z29_ddN0_imm4m1 },
-	{ 0x2a10, 0x2aff,  1, 1,  11, Z2A_ddN0_imm4m1 },
-	{ 0x2b10, 0x2bff,  1, 1,  11, Z2B_ddN0_imm4m1 },
-	{ 0x2c10, 0x2cff,  1, 1,  12, Z2C_ssN0_dddd },
-	{ 0x2d10, 0x2dff,  1, 1,  12, Z2D_ssN0_dddd },
-	{ 0x2e10, 0x2eff,  1, 1,   8, Z2E_ddN0_ssss },
-	{ 0x2f10, 0x2fff,  1, 1,   8, Z2F_ddN0_ssss },
-	{ 0x3000, 0x300f,  1, 2,  14, Z30_0000_dddd_dsp16 },
-	{ 0x3010, 0x30ff,  1, 2,  14, Z30_ssN0_dddd_imm16 },
-	{ 0x3100, 0x310f,  1, 2,  14, Z31_0000_dddd_dsp16 },
-	{ 0x3110, 0x31ff,  1, 2,  14, Z31_ssN0_dddd_imm16 },
-	{ 0x3200, 0x320f,  1, 2,  14, Z32_0000_ssss_dsp16 },
-	{ 0x3210, 0x32ff,  1, 2,  14, Z32_ddN0_ssss_imm16 },
-	{ 0x3300, 0x330f,  1, 2,  14, Z33_0000_ssss_dsp16 },
-	{ 0x3310, 0x33ff,  1, 2,  14, Z33_ddN0_ssss_imm16 },
-	{ 0x3400, 0x340f,  1, 2,  15, Z34_0000_dddd_dsp16 },
-	{ 0x3410, 0x34ff,  1, 2,  15, Z34_ssN0_dddd_imm16 },
-	{ 0x3500, 0x350f,  1, 2,  17, Z35_0000_dddd_dsp16 },
-	{ 0x3510, 0x35ff,  1, 2,  17, Z35_ssN0_dddd_imm16 },
-	{ 0x3600, 0x3600,  1, 1,   2, Z36_0000_0000 },
-	{ 0x3601, 0x36ff,  1, 1,  10, Z36_imm8 },
-	{ 0x3700, 0x370f,  1, 2,  17, Z37_0000_ssss_dsp16 },
-	{ 0x3710, 0x37ff,  1, 2,  17, Z37_ddN0_ssss_imm16 },
-	{ 0x3800, 0x38ff,  1, 1,  10, Z38_imm8 },
-	{ 0x3910, 0x39f0, 16, 1,  12, Z39_ssN0_0000 },
-	{ 0x3a00, 0x3af0, 16, 2,  21, Z3A_ssss_0000_0000_aaaa_dddd_x000 },
-	{ 0x3a01, 0x3af1, 16, 2,  21, Z3A_ssss_0001_0000_aaaa_dddd_x000 },
-	{ 0x3a02, 0x3af2, 16, 2,  21, Z3A_ssss_0010_0000_aaaa_dddd_x000 },
-	{ 0x3a03, 0x3af3, 16, 2,  21, Z3A_ssss_0011_0000_aaaa_dddd_x000 },
-	{ 0x3a04, 0x3af4, 16, 2,  10, Z3A_dddd_0100_imm16 },
-	{ 0x3a05, 0x3af5, 16, 2,  10, Z3A_dddd_0101_imm16 },
-	{ 0x3a06, 0x3af6, 16, 2,  12, Z3A_ssss_0110_imm16 },
-	{ 0x3a07, 0x3af7, 16, 2,  12, Z3A_ssss_0111_imm16 },
-	{ 0x3a08, 0x3af8, 16, 2,  21, Z3A_ssss_1000_0000_aaaa_dddd_x000 },
-	{ 0x3a09, 0x3af9, 16, 2,  21, Z3A_ssss_1001_0000_aaaa_dddd_x000 },
-	{ 0x3a0a, 0x3afa, 16, 2,  21, Z3A_ssss_1010_0000_aaaa_dddd_x000 },
-	{ 0x3a0b, 0x3afb, 16, 2,  21, Z3A_ssss_1011_0000_aaaa_dddd_x000 },
-	{ 0x3b00, 0x3bf0, 16, 2,  21, Z3B_ssss_0000_0000_aaaa_dddd_x000 },
-	{ 0x3b01, 0x3bf1, 16, 2,  21, Z3B_ssss_0001_0000_aaaa_dddd_x000 },
-	{ 0x3b02, 0x3bf2, 16, 2,  21, Z3B_ssss_0010_0000_aaaa_dddd_x000 },
-	{ 0x3b03, 0x3bf3, 16, 2,  21, Z3B_ssss_0011_0000_aaaa_dddd_x000 },
-	{ 0x3b04, 0x3bf4, 16, 2,  12, Z3B_dddd_0100_imm16 },
-	{ 0x3b05, 0x3bf5, 16, 2,  12, Z3B_dddd_0101_imm16 },
-	{ 0x3b06, 0x3bf6, 16, 2,  12, Z3B_ssss_0110_imm16 },
-	{ 0x3b07, 0x3bf7, 16, 2,  12, Z3B_ssss_0111_imm16 },
-	{ 0x3b08, 0x3bf8, 16, 2,  21, Z3B_ssss_1000_0000_aaaa_dddd_x000 },
-	{ 0x3b09, 0x3bf9, 16, 2,  21, Z3B_ssss_1001_0000_aaaa_dddd_x000 },
-	{ 0x3b0a, 0x3bfa, 16, 2,  21, Z3B_ssss_1010_0000_aaaa_dddd_x000 },
-	{ 0x3b0b, 0x3bfb, 16, 2,  21, Z3B_ssss_1011_0000_aaaa_dddd_x000 },
-	{ 0x3c00, 0x3cff,  1, 1,  10, Z3C_ssss_dddd },
-	{ 0x3d00, 0x3dff,  1, 1,  10, Z3D_ssss_dddd },
-	{ 0x3e00, 0x3eff,  1, 1,  12, Z3E_dddd_ssss },
-	{ 0x3f00, 0x3fff,  1, 1,  12, Z3F_dddd_ssss },
-	{ 0x4000, 0x400f,  1, 2,   9, Z40_0000_dddd_addr },
-	{ 0x4010, 0x40ff,  1, 2,  10, Z40_ssN0_dddd_addr },
-	{ 0x4100, 0x410f,  1, 2,   9, Z41_0000_dddd_addr },
-	{ 0x4110, 0x41ff,  1, 2,  10, Z41_ssN0_dddd_addr },
-	{ 0x4200, 0x420f,  1, 2,   9, Z42_0000_dddd_addr },
-	{ 0x4210, 0x42ff,  1, 2,  10, Z42_ssN0_dddd_addr },
-	{ 0x4300, 0x430f,  1, 2,   9, Z43_0000_dddd_addr },
-	{ 0x4310, 0x43ff,  1, 2,  10, Z43_ssN0_dddd_addr },
-	{ 0x4400, 0x440f,  1, 2,   9, Z44_0000_dddd_addr },
-	{ 0x4410, 0x44ff,  1, 2,  10, Z44_ssN0_dddd_addr },
-	{ 0x4500, 0x450f,  1, 2,   9, Z45_0000_dddd_addr },
-	{ 0x4510, 0x45ff,  1, 2,  10, Z45_ssN0_dddd_addr },
-	{ 0x4600, 0x460f,  1, 2,   9, Z46_0000_dddd_addr },
-	{ 0x4610, 0x46ff,  1, 2,  10, Z46_ssN0_dddd_addr },
-	{ 0x4700, 0x470f,  1, 2,   9, Z47_0000_dddd_addr },
-	{ 0x4710, 0x47ff,  1, 2,  10, Z47_ssN0_dddd_addr },
-	{ 0x4800, 0x480f,  1, 2,   9, Z48_0000_dddd_addr },
-	{ 0x4810, 0x48ff,  1, 2,  10, Z48_ssN0_dddd_addr },
-	{ 0x4900, 0x490f,  1, 2,   9, Z49_0000_dddd_addr },
-	{ 0x4910, 0x49ff,  1, 2,  10, Z49_ssN0_dddd_addr },
-	{ 0x4a00, 0x4a0f,  1, 2,   9, Z4A_0000_dddd_addr },
-	{ 0x4a10, 0x4aff,  1, 2,  10, Z4A_ssN0_dddd_addr },
-	{ 0x4b00, 0x4b0f,  1, 2,   9, Z4B_0000_dddd_addr },
-	{ 0x4b10, 0x4bff,  1, 2,  10, Z4B_ssN0_dddd_addr },
-	{ 0x4c00, 0x4c00,  1, 2,  15, Z4C_0000_0000_addr },
-	{ 0x4c01, 0x4c01,  1, 3,  14, Z4C_0000_0001_addr_imm8 },
-	{ 0x4c02, 0x4c02,  1, 2,  15, Z4C_0000_0010_addr },
-	{ 0x4c04, 0x4c04,  1, 2,  11, Z4C_0000_0100_addr },
-	{ 0x4c05, 0x4c05,  1, 3,  14, Z4C_0000_0101_addr_imm8 },
-	{ 0x4c06, 0x4c06,  1, 2,  14, Z4C_0000_0110_addr },
-	{ 0x4c08, 0x4c08,  1, 2,  11, Z4C_0000_1000_addr },
-	{ 0x4c10, 0x4cf0, 16, 2,  16, Z4C_ddN0_0000_addr },
-	{ 0x4c11, 0x4cf1, 16, 3,  15, Z4C_ddN0_0001_addr_imm8 },
-	{ 0x4c12, 0x4cf2, 16, 2,  16, Z4C_ddN0_0010_addr },
-	{ 0x4c14, 0x4cf4, 16, 2,  12, Z4C_ddN0_0100_addr },
-	{ 0x4c15, 0x4cf5, 16, 3,  15, Z4C_ddN0_0101_addr_imm8 },
-	{ 0x4c16, 0x4cf6, 16, 2,  15, Z4C_ddN0_0110_addr },
-	{ 0x4c18, 0x4cf8, 16, 2,  12, Z4C_ddN0_1000_addr },
-	{ 0x4d00, 0x4d00,  1, 2,  15, Z4D_0000_0000_addr },
-	{ 0x4d01, 0x4d01,  1, 3,  14, Z4D_0000_0001_addr_imm16 },
-	{ 0x4d02, 0x4d02,  1, 2,  15, Z4D_0000_0010_addr },
-	{ 0x4d04, 0x4d04,  1, 2,  11, Z4D_0000_0100_addr },
-	{ 0x4d05, 0x4d05,  1, 3,  14, Z4D_0000_0101_addr_imm16 },
-	{ 0x4d06, 0x4d06,  1, 2,  14, Z4D_0000_0110_addr },
-	{ 0x4d08, 0x4d08,  1, 2,  11, Z4D_0000_1000_addr },
-	{ 0x4d10, 0x4df0, 16, 2,  16, Z4D_ddN0_0000_addr },
-	{ 0x4d11, 0x4df1, 16, 3,  15, Z4D_ddN0_0001_addr_imm16 },
-	{ 0x4d12, 0x4df2, 16, 2,  16, Z4D_ddN0_0010_addr },
-	{ 0x4d14, 0x4df4, 16, 2,  12, Z4D_ddN0_0100_addr },
-	{ 0x4d15, 0x4df5, 16, 3,  15, Z4D_ddN0_0101_addr_imm16 },
-	{ 0x4d16, 0x4df6, 16, 2,  15, Z4D_ddN0_0110_addr },
-	{ 0x4d18, 0x4df8, 16, 2,  12, Z4D_ddN0_1000_addr },
-	{ 0x4e11, 0x4ef0, 16, 2,  12, Z4E_ddN0_ssN0_addr },
-	{ 0x4f00, 0x4fff,  1, 1,  10, Z4F_ext },
-	{ 0x5000, 0x500f,  1, 2,  15, Z50_0000_dddd_addr },
-	{ 0x5010, 0x50ff,  1, 2,  16, Z50_ssN0_dddd_addr },
-	{ 0x5110, 0x51f0, 16, 2,  21, Z51_ddN0_0000_addr },
-	{ 0x5111, 0x51f1, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x5112, 0x51f2, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x5113, 0x51f3, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x5114, 0x51f4, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x5115, 0x51f5, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x5116, 0x51f6, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x5117, 0x51f7, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x5118, 0x51f8, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x5119, 0x51f9, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x511a, 0x51fa, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x511b, 0x51fb, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x511c, 0x51fc, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x511d, 0x51fd, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x511e, 0x51fe, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x511f, 0x51ff, 16, 2,  21, Z51_ddN0_ssN0_addr },
-	{ 0x5200, 0x520f,  1, 2,  15, Z52_0000_dddd_addr },
-	{ 0x5210, 0x52ff,  1, 2,  16, Z52_ssN0_dddd_addr },
-	{ 0x5310, 0x53f0, 16, 2,  14, Z53_ddN0_0000_addr },
-	{ 0x5311, 0x53f1, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x5312, 0x53f2, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x5313, 0x53f3, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x5314, 0x53f4, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x5315, 0x53f5, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x5316, 0x53f6, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x5317, 0x53f7, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x5318, 0x53f8, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x5319, 0x53f9, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x531a, 0x53fa, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x531b, 0x53fb, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x531c, 0x53fc, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x531d, 0x53fd, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x531e, 0x53fe, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x531f, 0x53ff, 16, 2,  14, Z53_ddN0_ssN0_addr },
-	{ 0x5400, 0x540f,  1, 2,  12, Z54_0000_dddd_addr },
-	{ 0x5410, 0x54ff,  1, 2,  13, Z54_ssN0_dddd_addr },
-	{ 0x5510, 0x55f0, 16, 2,  23, Z55_ssN0_0000_addr },
-	{ 0x5511, 0x55f1, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x5512, 0x55f2, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x5513, 0x55f3, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x5514, 0x55f4, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x5515, 0x55f5, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x5516, 0x55f6, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x5517, 0x55f7, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x5518, 0x55f8, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x5519, 0x55f9, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x551a, 0x55fa, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x551b, 0x55fb, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x551c, 0x55fc, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x551d, 0x55fd, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x551e, 0x55fe, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x551f, 0x55ff, 16, 2,  23, Z55_ssN0_ddN0_addr },
-	{ 0x5600, 0x560f,  1, 2,  15, Z56_0000_dddd_addr },
-	{ 0x5610, 0x56ff,  1, 2,  16, Z56_ssN0_dddd_addr },
-	{ 0x5710, 0x57f0, 16, 2,  16, Z57_ssN0_0000_addr },
-	{ 0x5711, 0x57f1, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x5712, 0x57f2, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x5713, 0x57f3, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x5714, 0x57f4, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x5715, 0x57f5, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x5716, 0x57f6, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x5717, 0x57f7, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x5718, 0x57f8, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x5719, 0x57f9, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x571a, 0x57fa, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x571b, 0x57fb, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x571c, 0x57fc, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x571d, 0x57fd, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x571e, 0x57fe, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x571f, 0x57ff, 16, 2,  16, Z57_ssN0_ddN0_addr },
-	{ 0x5800, 0x580f,  1, 2, 283, Z58_0000_dddd_addr },
-	{ 0x5810, 0x58ff,  1, 2, 284, Z58_ssN0_dddd_addr },
-	{ 0x5900, 0x590f,  1, 2,  71, Z59_0000_dddd_addr },
-	{ 0x5910, 0x59ff,  1, 2,  72, Z59_ssN0_dddd_addr },
-	{ 0x5a00, 0x5a0f,  1, 2, 745, Z5A_0000_dddd_addr },
-	{ 0x5a10, 0x5aff,  1, 2, 746, Z5A_ssN0_dddd_addr },
-	{ 0x5b00, 0x5b0f,  1, 2, 108, Z5B_0000_dddd_addr },
-	{ 0x5b10, 0x5bff,  1, 2, 109, Z5B_ssN0_dddd_addr },
-	{ 0x5c01, 0x5c01,  1, 3,  14, Z5C_0000_0001_0000_dddd_0000_nmin1_addr },
-	{ 0x5c08, 0x5c08,  1, 2,  16, Z5C_0000_1000_addr },
-	{ 0x5c09, 0x5c09,  1, 3,  14, Z5C_0000_1001_0000_ssss_0000_nmin1_addr },
-	{ 0x5c11, 0x5cf1, 16, 3,  15, Z5C_ssN0_0001_0000_dddd_0000_nmin1_addr },
-	{ 0x5c18, 0x5cf8, 16, 2,  17, Z5C_ddN0_1000_addr },
-	{ 0x5c19, 0x5cf9, 16, 3,  15, Z5C_ddN0_1001_0000_ssN0_0000_nmin1_addr },
-	{ 0x5d00, 0x5d0f,  1, 2,  15, Z5D_0000_ssss_addr },
-	{ 0x5d10, 0x5dff,  1, 2,  14, Z5D_ddN0_ssss_addr },
-	{ 0x5e00, 0x5e0f,  1, 2,   7, Z5E_0000_cccc_addr },
-	{ 0x5e10, 0x5eff,  1, 2,   8, Z5E_ddN0_cccc_addr },
-	{ 0x5f00, 0x5f00,  1, 2,  12, Z5F_0000_0000_addr },
-	{ 0x5f10, 0x5ff0, 16, 2,  13, Z5F_ddN0_0000_addr },
-	{ 0x6000, 0x600f,  1, 2,   9, Z60_0000_dddd_addr },
-	{ 0x6010, 0x60ff,  1, 2,  10, Z60_ssN0_dddd_addr },
-	{ 0x6100, 0x610f,  1, 2,   9, Z61_0000_dddd_addr },
-	{ 0x6110, 0x61ff,  1, 2,  10, Z61_ssN0_dddd_addr },
-	{ 0x6200, 0x620f,  1, 2,  13, Z62_0000_imm4_addr },
-	{ 0x6210, 0x62ff,  1, 2,  14, Z62_ddN0_imm4_addr },
-	{ 0x6300, 0x630f,  1, 2,  13, Z63_0000_imm4_addr },
-	{ 0x6310, 0x63ff,  1, 2,  14, Z63_ddN0_imm4_addr },
-	{ 0x6400, 0x640f,  1, 2,  13, Z64_0000_imm4_addr },
-	{ 0x6410, 0x64ff,  1, 2,  14, Z64_ddN0_imm4_addr },
-	{ 0x6500, 0x650f,  1, 2,  13, Z65_0000_imm4_addr },
-	{ 0x6510, 0x65ff,  1, 2,  14, Z65_ddN0_imm4_addr },
-	{ 0x6600, 0x660f,  1, 2,  10, Z66_0000_imm4_addr },
-	{ 0x6610, 0x66ff,  1, 2,  11, Z66_ddN0_imm4_addr },
-	{ 0x6700, 0x670f,  1, 2,  10, Z67_0000_imm4_addr },
-	{ 0x6710, 0x67ff,  1, 2,  11, Z67_ddN0_imm4_addr },
-	{ 0x6800, 0x680f,  1, 2,  13, Z68_0000_imm4m1_addr },
-	{ 0x6810, 0x68ff,  1, 2,  14, Z68_ddN0_imm4m1_addr },
-	{ 0x6900, 0x690f,  1, 2,  13, Z69_0000_imm4m1_addr },
-	{ 0x6910, 0x69ff,  1, 2,  14, Z69_ddN0_imm4m1_addr },
-	{ 0x6a00, 0x6a0f,  1, 2,  13, Z6A_0000_imm4m1_addr },
-	{ 0x6a10, 0x6aff,  1, 2,  14, Z6A_ddN0_imm4m1_addr },
-	{ 0x6b00, 0x6b0f,  1, 2,  13, Z6B_0000_imm4m1_addr },
-	{ 0x6b10, 0x6bff,  1, 2,  14, Z6B_ddN0_imm4m1_addr },
-	{ 0x6c00, 0x6c0f,  1, 2,  15, Z6C_0000_dddd_addr },
-	{ 0x6c10, 0x6cff,  1, 2,  16, Z6C_ssN0_dddd_addr },
-	{ 0x6d00, 0x6d0f,  1, 2,  15, Z6D_0000_dddd_addr },
-	{ 0x6d10, 0x6dff,  1, 2,  16, Z6D_ssN0_dddd_addr },
-	{ 0x6e00, 0x6e0f,  1, 2,  11, Z6E_0000_ssss_addr },
-	{ 0x6e10, 0x6eff,  1, 2,  11, Z6E_ddN0_ssss_addr },
-	{ 0x6f00, 0x6f0f,  1, 2,  11, Z6F_0000_ssss_addr },
-	{ 0x6f10, 0x6fff,  1, 2,  12, Z6F_ddN0_ssss_addr },
-	{ 0x7010, 0x70ff,  1, 2,  14, Z70_ssN0_dddd_0000_xxxx_0000_0000 },
-	{ 0x7110, 0x71ff,  1, 2,  14, Z71_ssN0_dddd_0000_xxxx_0000_0000 },
-	{ 0x7210, 0x72ff,  1, 2,  14, Z72_ddN0_ssss_0000_xxxx_0000_0000 },
-	{ 0x7310, 0x73ff,  1, 2,  14, Z73_ddN0_ssss_0000_xxxx_0000_0000 },
-	{ 0x7410, 0x74ff,  1, 2,  15, Z74_ssN0_dddd_0000_xxxx_0000_0000 },
-	{ 0x7510, 0x75ff,  1, 2,  17, Z75_ssN0_dddd_0000_xxxx_0000_0000 },
-	{ 0x7600, 0x760f,  1, 2,  12, Z76_0000_dddd_addr },
-	{ 0x7610, 0x76ff,  1, 2,  13, Z76_ssN0_dddd_addr },
-	{ 0x7710, 0x77ff,  1, 2,  17, Z77_ddN0_ssss_0000_xxxx_0000_0000 },
-	{ 0x7800, 0x78ff,  1, 1,  10, Z78_imm8 },
-	{ 0x7900, 0x7900,  1, 2,  16, Z79_0000_0000_addr },
-	{ 0x7910, 0x79f0, 16, 2,  17, Z79_ssN0_0000_addr },
-	{ 0x7a00, 0x7a00,  1, 1,   8, Z7A_0000_0000 },
-	{ 0x7b00, 0x7b00,  1, 1,  13, Z7B_0000_0000 },
-	{ 0x7b08, 0x7b08,  1, 1,   5, Z7B_0000_1000 },
-	{ 0x7b09, 0x7b09,  1, 1,   5, Z7B_0000_1001 },
-	{ 0x7b0a, 0x7b0a,  1, 1,   7, Z7B_0000_1010 },
-	{ 0x7b0d, 0x7bfd, 16, 1,  12, Z7B_dddd_1101 },
-	{ 0x7c00, 0x7c03,  1, 1,   7, Z7C_0000_00ii },
-	{ 0x7c04, 0x7c07,  1, 1,   7, Z7C_0000_01ii },
-	{ 0x7d00, 0x7df0, 16, 1,   7, Z7D_dddd_0ccc },
-	{ 0x7d01, 0x7df1, 16, 1,   7, Z7D_dddd_0ccc },
-	{ 0x7d02, 0x7df2, 16, 1,   7, Z7D_dddd_0ccc },
-	{ 0x7d03, 0x7df3, 16, 1,   7, Z7D_dddd_0ccc },
-	{ 0x7d04, 0x7df4, 16, 1,   7, Z7D_dddd_0ccc },
-	{ 0x7d05, 0x7df5, 16, 1,   7, Z7D_dddd_0ccc },
-	{ 0x7d06, 0x7df6, 16, 1,   7, Z7D_dddd_0ccc },
-	{ 0x7d07, 0x7df7, 16, 1,   7, Z7D_dddd_0ccc },
-	{ 0x7d08, 0x7df8, 16, 1,   7, Z7D_ssss_1ccc },
-	{ 0x7d09, 0x7df9, 16, 1,   7, Z7D_ssss_1ccc },
-	{ 0x7d0a, 0x7dfa, 16, 1,   7, Z7D_ssss_1ccc },
-	{ 0x7d0b, 0x7dfb, 16, 1,   7, Z7D_ssss_1ccc },
-	{ 0x7d0c, 0x7dfc, 16, 1,   7, Z7D_ssss_1ccc },
-	{ 0x7d0d, 0x7dfd, 16, 1,   7, Z7D_ssss_1ccc },
-	{ 0x7d0e, 0x7dfe, 16, 1,   7, Z7D_ssss_1ccc },
-	{ 0x7d0f, 0x7dff, 16, 1,   7, Z7D_ssss_1ccc },
-	{ 0x7e00, 0x7eff,  1, 1,  10, Z7E_imm8 },
-	{ 0x7f00, 0x7fff,  1, 1,  33, Z7F_imm8 },
-	{ 0x8000, 0x80ff,  1, 1,   4, Z80_ssss_dddd },
-	{ 0x8100, 0x81ff,  1, 1,   4, Z81_ssss_dddd },
-	{ 0x8200, 0x82ff,  1, 1,   4, Z82_ssss_dddd },
-	{ 0x8300, 0x83ff,  1, 1,   4, Z83_ssss_dddd },
-	{ 0x8400, 0x84ff,  1, 1,   4, Z84_ssss_dddd },
-	{ 0x8500, 0x85ff,  1, 1,   4, Z85_ssss_dddd },
-	{ 0x8600, 0x86ff,  1, 1,   4, Z86_ssss_dddd },
-	{ 0x8700, 0x87ff,  1, 1,   4, Z87_ssss_dddd },
-	{ 0x8800, 0x88ff,  1, 1,   4, Z88_ssss_dddd },
-	{ 0x8900, 0x89ff,  1, 1,   4, Z89_ssss_dddd },
-	{ 0x8a00, 0x8aff,  1, 1,   4, Z8A_ssss_dddd },
-	{ 0x8b00, 0x8bff,  1, 1,   4, Z8B_ssss_dddd },
-	{ 0x8c00, 0x8cf0, 16, 1,   7, Z8C_dddd_0000 },
-	{ 0x8c02, 0x8cf2, 16, 1,   7, Z8C_dddd_0010 },
-	{ 0x8c04, 0x8cf4, 16, 1,   7, Z8C_dddd_0100 },
-	{ 0x8c06, 0x8cf6, 16, 1,   7, Z8C_dddd_0110 },
-	{ 0x8c01, 0x8cf1, 16, 1,   7, Z8C_dddd_0001 },
-	{ 0x8c08, 0x8cf8, 16, 1,   7, Z8C_dddd_1000 },
-	{ 0x8c09, 0x8cf9, 16, 1,   7, Z8C_dddd_1001 },
-	{ 0x8d00, 0x8df0, 16, 1,   7, Z8D_dddd_0000 },
-	{ 0x8d01, 0x8df1, 16, 1,   7, Z8D_imm4_0001 },
-	{ 0x8d02, 0x8df2, 16, 1,   7, Z8D_dddd_0010 },
-	{ 0x8d03, 0x8df3, 16, 1,   7, Z8D_imm4_0011 },
-	{ 0x8d04, 0x8df4, 16, 1,   7, Z8D_dddd_0100 },
-	{ 0x8d05, 0x8df5, 16, 1,   7, Z8D_imm4_0101 },
-	{ 0x8d06, 0x8df6, 16, 1,   7, Z8D_dddd_0110 },
-	{ 0x8d07, 0x8d07,  1, 1,   7, Z8D_0000_0111 },
-	{ 0x8d08, 0x8df8, 16, 1,   7, Z8D_dddd_1000 },
-	{ 0x8e00, 0x8eff,  1, 1,  10, Z8E_imm8 },
-	{ 0x8f00, 0x8fff,  1, 1,  10, Z8F_imm8 },
-	{ 0x9000, 0x90ff,  1, 1,   8, Z90_ssss_dddd },
-	{ 0x9110, 0x91ff,  1, 1,  12, Z91_ddN0_ssss },
-	{ 0x9200, 0x92ff,  1, 1,   8, Z92_ssss_dddd },
-	{ 0x9310, 0x93ff,  1, 1,   9, Z93_ddN0_ssss },
-	{ 0x9400, 0x94ff,  1, 1,   5, Z94_ssss_dddd },
-	{ 0x9510, 0x95ff,  1, 1,  12, Z95_ssN0_dddd },
-	{ 0x9600, 0x96ff,  1, 1,   8, Z96_ssss_dddd },
-	{ 0x9710, 0x97ff,  1, 1,   8, Z97_ssN0_dddd },
-	{ 0x9800, 0x98ff,  1, 1, 282, Z98_ssss_dddd },
-	{ 0x9900, 0x99ff,  1, 1,  70, Z99_ssss_dddd },
-	{ 0x9a00, 0x9aff,  1, 1, 744, Z9A_ssss_dddd },
-	{ 0x9b00, 0x9bff,  1, 1, 107, Z9B_ssss_dddd },
-	{ 0x9c00, 0x9cf8,  8, 1,  13, Z9C_dddd_1000 },
-	{ 0x9d00, 0x9dff,  1, 1,  10, Z9D_imm8 },
-	{ 0x9e00, 0x9e0f,  1, 1,  10, Z9E_0000_cccc },
-	{ 0x9f00, 0x9fff,  1, 1,  10, Z9F_imm8 },
-	{ 0xa000, 0xa0ff,  1, 1,   3, ZA0_ssss_dddd },
-	{ 0xa100, 0xa1ff,  1, 1,   3, ZA1_ssss_dddd },
-	{ 0xa200, 0xa2ff,  1, 1,   4, ZA2_dddd_imm4 },
-	{ 0xa300, 0xa3ff,  1, 1,   4, ZA3_dddd_imm4 },
-	{ 0xa400, 0xa4ff,  1, 1,   4, ZA4_dddd_imm4 },
-	{ 0xa500, 0xa5ff,  1, 1,   4, ZA5_dddd_imm4 },
-	{ 0xa600, 0xa6ff,  1, 1,   4, ZA6_dddd_imm4 },
-	{ 0xa700, 0xa7ff,  1, 1,   4, ZA7_dddd_imm4 },
-	{ 0xa800, 0xa8ff,  1, 1,   4, ZA8_dddd_imm4m1 },
-	{ 0xa900, 0xa9ff,  1, 1,   4, ZA9_dddd_imm4m1 },
-	{ 0xaa00, 0xaaff,  1, 1,   4, ZAA_dddd_imm4m1 },
-	{ 0xab00, 0xabff,  1, 1,   4, ZAB_dddd_imm4m1 },
-	{ 0xac00, 0xacff,  1, 1,   6, ZAC_ssss_dddd },
-	{ 0xad00, 0xadff,  1, 1,   6, ZAD_ssss_dddd },
-	{ 0xae00, 0xaeff,  1, 1,   5, ZAE_dddd_cccc },
-	{ 0xaf00, 0xafff,  1, 1,   5, ZAF_dddd_cccc },
-	{ 0xb000, 0xb0f0, 16, 1,   5, ZB0_dddd_0000 },
-	{ 0xb100, 0xb1f0, 16, 1,  11, ZB1_dddd_0000 },
-	{ 0xb107, 0xb1f7, 16, 1,  11, ZB1_dddd_0111 },
-	{ 0xb10a, 0xb1fa, 16, 1,  11, ZB1_dddd_1010 },
-	{ 0xb200, 0xb2f0, 16, 1,   6, ZB2_dddd_00I0 },
-	{ 0xb201, 0xb2f1, 16, 2,  13, ZB2_dddd_0001_imm8 },
-	{ 0xb202, 0xb2f2, 16, 1,   6, ZB2_dddd_00I0 },
-	{ 0xb203, 0xb2f3, 16, 2,  15, ZB2_dddd_0011_0000_ssss_0000_0000 },
-	{ 0xb204, 0xb2f4, 16, 1,   6, ZB2_dddd_01I0 },
-	{ 0xb206, 0xb2f6, 16, 1,   6, ZB2_dddd_01I0 },
-	{ 0xb208, 0xb2f8, 16, 1,   9, ZB2_dddd_10I0 },
-	{ 0xb209, 0xb2f9, 16, 2,  13, ZB2_dddd_1001_imm8 },
-	{ 0xb20a, 0xb2fa, 16, 1,   9, ZB2_dddd_10I0 },
-	{ 0xb20b, 0xb2fb, 16, 2,  15, ZB2_dddd_1011_0000_ssss_0000_0000 },
-	{ 0xb20c, 0xb2fc, 16, 1,   9, ZB2_dddd_11I0 },
-	{ 0xb20e, 0xb2fe, 16, 1,   9, ZB2_dddd_11I0 },
-	{ 0xb300, 0xb3f0, 16, 1,   6, ZB3_dddd_00I0 },
-	{ 0xb301, 0xb3f1, 16, 2,  13, ZB3_dddd_0001_imm8 },
-	{ 0xb302, 0xb3f2, 16, 1,   6, ZB3_dddd_00I0 },
-	{ 0xb303, 0xb3f3, 16, 2,  15, ZB3_dddd_0011_0000_ssss_0000_0000 },
-	{ 0xb304, 0xb3f4, 16, 1,   6, ZB3_dddd_01I0 },
-	{ 0xb305, 0xb3f5, 16, 2,  13, ZB3_dddd_0101_imm8 },
-	{ 0xb306, 0xb3f6, 16, 1,   6, ZB3_dddd_01I0 },
-	{ 0xb307, 0xb3f7, 16, 2,  15, ZB3_dddd_0111_0000_ssss_0000_0000 },
-	{ 0xb308, 0xb3f8, 16, 1,   6, ZB3_dddd_10I0 },
-	{ 0xb309, 0xb3f9, 16, 2,  13, ZB3_dddd_1001_imm8 },
-	{ 0xb30a, 0xb3fa, 16, 1,   6, ZB3_dddd_10I0 },
-	{ 0xb30b, 0xb3fb, 16, 2,  15, ZB3_dddd_1011_0000_ssss_0000_0000 },
-	{ 0xb30c, 0xb3fc, 16, 1,   6, ZB3_dddd_11I0 },
-	{ 0xb30d, 0xb3fd, 16, 2,  13, ZB3_dddd_1101_imm8 },
-	{ 0xb30e, 0xb3fe, 16, 1,   6, ZB3_dddd_11I0 },
-	{ 0xb30f, 0xb3ff, 16, 2,  15, ZB3_dddd_1111_0000_ssss_0000_0000 },
-	{ 0xb400, 0xb4ff,  1, 1,   5, ZB4_ssss_dddd },
-	{ 0xb500, 0xb5ff,  1, 1,   5, ZB5_ssss_dddd },
-	{ 0xb600, 0xb6ff,  1, 1,   5, ZB6_ssss_dddd },
-	{ 0xb700, 0xb7ff,  1, 1,   5, ZB7_ssss_dddd },
-	{ 0xb810, 0xb8f0, 16, 2,  25, ZB8_ddN0_0000_0000_rrrr_ssN0_0000 },
-	{ 0xb812, 0xb8f2, 16, 2,  25, ZB8_ddN0_0010_0000_rrrr_ssN0_0000 },
-	{ 0xb814, 0xb8f4, 16, 2,  25, ZB8_ddN0_0100_0000_rrrr_ssN0_0000 },
-	{ 0xb816, 0xb8f6, 16, 2,  25, ZB8_ddN0_0110_0000_rrrr_ssN0_1110 },
-	{ 0xb818, 0xb8f8, 16, 2,  25, ZB8_ddN0_1000_0000_rrrr_ssN0_0000 },
-	{ 0xb81a, 0xb8fa, 16, 2,  25, ZB8_ddN0_1010_0000_rrrr_ssN0_0000 },
-	{ 0xb81c, 0xb8fc, 16, 2,  25, ZB8_ddN0_1100_0000_rrrr_ssN0_0000 },
-	{ 0xb81e, 0xb8fe, 16, 2,  25, ZB8_ddN0_1110_0000_rrrr_ssN0_1110 },
-	{ 0xb900, 0xb9ff, 16, 1,  10, ZB9_imm8 },
-	{ 0xba10, 0xbaf0, 16, 2,  11, ZBA_ssN0_0000_0000_rrrr_dddd_cccc },
-	{ 0xba11, 0xbaf1, 16, 2,  11, ZBA_ssN0_0001_0000_rrrr_ddN0_x000 },
-	{ 0xba12, 0xbaf2, 16, 2,  11, ZBA_ssN0_0010_0000_rrrr_ddN0_cccc },
-	{ 0xba14, 0xbaf4, 16, 2,  11, ZBA_ssN0_0100_0000_rrrr_dddd_cccc },
-	{ 0xba16, 0xbaf6, 16, 2,  11, ZBA_ssN0_0110_0000_rrrr_ddN0_cccc },
-	{ 0xba18, 0xbaf8, 16, 2,  11, ZBA_ssN0_1000_0000_rrrr_dddd_cccc },
-	{ 0xba19, 0xbaf9, 16, 2,  11, ZBA_ssN0_1001_0000_rrrr_ddN0_x000 },
-	{ 0xba1a, 0xbafa, 16, 2,  11, ZBA_ssN0_1010_0000_rrrr_ddN0_cccc },
-	{ 0xba1c, 0xbafc, 16, 2,  11, ZBA_ssN0_1100_0000_rrrr_dddd_cccc },
-	{ 0xba1e, 0xbafe, 16, 2,  11, ZBA_ssN0_1110_0000_rrrr_ddN0_cccc },
-	{ 0xbb10, 0xbbf0, 16, 2,  11, ZBB_ssN0_0000_0000_rrrr_dddd_cccc },
-	{ 0xbb11, 0xbbf1, 16, 2,  11, ZBB_ssN0_0001_0000_rrrr_ddN0_x000 },
-	{ 0xbb12, 0xbbf2, 16, 2,  11, ZBB_ssN0_0010_0000_rrrr_ddN0_cccc },
-	{ 0xbb14, 0xbbf4, 16, 2,  11, ZBB_ssN0_0100_0000_rrrr_dddd_cccc },
-	{ 0xbb16, 0xbbf6, 16, 2,  11, ZBB_ssN0_0110_0000_rrrr_ddN0_cccc },
-	{ 0xbb18, 0xbbf8, 16, 2,  11, ZBB_ssN0_1000_0000_rrrr_dddd_cccc },
-	{ 0xbb19, 0xbbf9, 16, 2,  11, ZBB_ssN0_1001_0000_rrrr_ddN0_x000 },
-	{ 0xbb1a, 0xbbfa, 16, 2,  11, ZBB_ssN0_1010_0000_rrrr_ddN0_cccc },
-	{ 0xbb1c, 0xbbfc, 16, 2,  11, ZBB_ssN0_1100_0000_rrrr_dddd_cccc },
-	{ 0xbb1e, 0xbbfe, 16, 2,  11, ZBB_ssN0_1110_0000_rrrr_ddN0_cccc },
-	{ 0xbc00, 0xbcff,  1, 1,   9, ZBC_aaaa_bbbb },
-	{ 0xbd00, 0xbdff,  1, 1,   5, ZBD_dddd_imm4 },
-	{ 0xbe00, 0xbeff,  1, 1,   9, ZBE_aaaa_bbbb },
-	{ 0xbf00, 0xbfff,  1, 1,  10, ZBF_imm8 },
-	{ 0xc000, 0xcfff,  1, 1,   5, ZC_dddd_imm8 },
-	{ 0xd000, 0xdfff,  1, 1,  10, ZD_dsp12 },
-	{ 0xe000, 0xefff,  1, 1,   6, ZE_cccc_dsp8 },
-	{ 0xf000, 0xf07f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf100, 0xf17f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf200, 0xf27f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf300, 0xf37f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf400, 0xf47f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf500, 0xf57f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf600, 0xf67f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf700, 0xf77f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf800, 0xf87f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf900, 0xf97f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xfa00, 0xfa7f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xfb00, 0xfb7f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xfc00, 0xfc7f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xfd00, 0xfd7f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xfe00, 0xfe7f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xff00, 0xff7f,  1, 1,  11, ZF_dddd_0dsp7 },
-	{ 0xf080, 0xf0ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xf180, 0xf1ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xf280, 0xf2ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xf380, 0xf3ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xf480, 0xf4ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xf580, 0xf5ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xf680, 0xf6ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xf780, 0xf7ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xf880, 0xf8ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xf980, 0xf9ff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xfa80, 0xfaff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xfb80, 0xfbff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xfc80, 0xfcff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xfd80, 0xfdff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xfe80, 0xfeff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0xff80, 0xffff,  1, 1,  11, ZF_dddd_1dsp7 },
-	{ 0,      0,       0, 0,   0, 0 },
-};
-
 
 static void PUSH_PC(void) { PUSHW(SP, Z->pc); }
 static uint32_t GET_PC(uint32_t VEC) { return RDMEM_W(0, VEC + 2); }
@@ -8175,27 +7664,31 @@ Z8K_HOT int z8k_run(z8k_t *cpu, int cycles_to_run)
 {
     Zs = *cpu;
     Z->icount = cycles_to_run;
+    const uint16_t *const *rp = z8k_rpage;
     do {
-        /* an NVI asserted while NVIE was clear becomes pending when it is enabled */
-        if (Z->irq_state[0] && (Z->fcw & F_NVIE)) Z->irq_req |= Z8000_NVI;
-        if (Z->irq_req) Interrupt();
-        Z->ppc = Z->pc;
-        if (Z->halt) { Z->icount = 0; break; }
-        Z->op[0] = RDOP();
+        if (__builtin_expect(Z->irq_req | Z->irq_state[0] | Z->halt, 0)) {
+            /* an NVI asserted while NVIE was clear becomes pending when it is enabled */
+            if (Z->irq_state[0] && (Z->fcw & F_NVIE)) Z->irq_req |= Z8000_NVI;
+            if (Z->irq_req) Interrupt();
+            if (Z->halt) { Z->icount = 0; break; }
+        }
+        uint32_t pc = Z->pc;
+        uint16_t op = rp[(pc >> 8) & 0xff][(pc & 0xff) >> 1];
+        Z->pc = pc + 2;
+        Z->op[0] = op;
         Z->op_valid = 1;
-        const Z8000_init *exec = &table[Z8000_EXEC(Z->op[0])];
+        unsigned idx = Z8000_EXEC(op);
 #ifdef Z8K_PROFILE
-        z8k_op_count[exec - table]++;
+        z8k_op_count[idx]++;
 #endif
-        Z->icount -= exec->cycles;
-        exec->opcode();
-        Z->op_valid = 0;
+        Z->icount -= z8000_exec_cyc[idx];
+        z8000_exec_fn[idx]();
     } while (Z->icount > 0);
     *cpu = Zs;
     return cycles_to_run - Z->icount;
 }
 
-static uint16_t z8000_exec_idx[0x1000] = {
+static Z8K_DATA uint16_t z8000_exec_idx[0x1000] = {
     0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,
     4,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,6,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
     8,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,
@@ -8325,7 +7818,7 @@ static uint16_t z8000_exec_idx[0x1000] = {
     306,306,306,306,306,306,306,306,307,307,307,307,307,307,307,307,308,308,308,308,308,308,308,308,309,309,309,309,309,309,309,309,
     310,310,310,310,310,310,310,310,311,311,311,311,311,311,311,311,312,312,312,312,312,312,312,312,313,313,313,313,313,313,313,313,
 };
-static uint16_t z8000_exec_blk[5024] = {
+static Z8K_DATA uint16_t z8000_exec_blk[5024] = {
     1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
     2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
     3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,
@@ -8640,6 +8133,92 @@ static uint16_t z8000_exec_blk[5024] = {
     518,518,518,518,518,518,518,518,518,518,518,518,518,518,518,518,
     503,503,503,503,503,503,503,503,503,503,503,503,503,503,503,503,
     519,519,519,519,519,519,519,519,519,519,519,519,519,519,519,519,
+};
+static Z8K_DATA opcode_func_t z8000_exec_fn[520] = {
+    zinvalid,Z00_0000_dddd_imm8,Z00_ssN0_dddd,Z01_0000_dddd_imm16,Z01_ssN0_dddd,Z02_0000_dddd_imm8,Z02_ssN0_dddd,Z03_0000_dddd_imm16,
+    Z03_ssN0_dddd,Z04_0000_dddd_imm8,Z04_ssN0_dddd,Z05_0000_dddd_imm16,Z05_ssN0_dddd,Z06_0000_dddd_imm8,Z06_ssN0_dddd,Z07_0000_dddd_imm16,
+    Z07_ssN0_dddd,Z08_0000_dddd_imm8,Z08_ssN0_dddd,Z09_0000_dddd_imm16,Z09_ssN0_dddd,Z0A_0000_dddd_imm8,Z0A_ssN0_dddd,Z0B_0000_dddd_imm16,
+    Z0B_ssN0_dddd,Z0C_ddN0_0000,Z0C_ddN0_0001_imm8,Z0C_ddN0_0010,Z0C_ddN0_0100,Z0C_ddN0_0101_imm8,Z0C_ddN0_0110,Z0C_ddN0_1000,
+    Z0D_ddN0_0000,Z0D_ddN0_0001_imm16,Z0D_ddN0_0010,Z0D_ddN0_0100,Z0D_ddN0_0101_imm16,Z0D_ddN0_0110,Z0D_ddN0_1000,Z0D_ddN0_1001_imm16,
+    Z0E_imm8,Z0F_imm8,Z10_0000_dddd_imm32,Z10_ssN0_dddd,Z11_ddN0_ssN0,Z12_0000_dddd_imm32,Z12_ssN0_dddd,Z13_ddN0_ssN0,
+    Z14_0000_dddd_imm32,Z14_ssN0_dddd,Z15_ssN0_ddN0,Z16_0000_dddd_imm32,Z16_ssN0_dddd,Z17_ssN0_ddN0,Z18_00N0_dddd_imm32,Z18_ssN0_dddd,
+    Z19_0000_dddd_imm16,Z19_ssN0_dddd,Z1A_0000_dddd_imm32,Z1A_ssN0_dddd,Z1B_0000_dddd_imm16,Z1B_ssN0_dddd,Z1C_ssN0_0001_0000_dddd_0000_nmin1,Z1C_ddN0_1000,
+    Z1C_ddN0_1001_0000_ssss_0000_nmin1,Z1D_ddN0_ssss,Z1E_ddN0_cccc,Z1F_ddN0_0000,Z20_0000_dddd_imm8,Z20_ssN0_dddd,Z21_0000_dddd_imm16,Z21_ssN0_dddd,
+    Z22_0000_ssss_0000_dddd_0000_0000,Z22_ddN0_imm4,Z23_0000_ssss_0000_dddd_0000_0000,Z23_ddN0_imm4,Z24_0000_ssss_0000_dddd_0000_0000,Z24_ddN0_imm4,Z25_0000_ssss_0000_dddd_0000_0000,Z25_ddN0_imm4,
+    Z26_0000_ssss_0000_dddd_0000_0000,Z26_ddN0_imm4,Z27_0000_ssss_0000_dddd_0000_0000,Z27_ddN0_imm4,Z28_ddN0_imm4m1,Z29_ddN0_imm4m1,Z2A_ddN0_imm4m1,Z2B_ddN0_imm4m1,
+    Z2C_ssN0_dddd,Z2D_ssN0_dddd,Z2E_ddN0_ssss,Z2F_ddN0_ssss,Z30_0000_dddd_dsp16,Z30_ssN0_dddd_imm16,Z31_0000_dddd_dsp16,Z31_ssN0_dddd_imm16,
+    Z32_0000_ssss_dsp16,Z32_ddN0_ssss_imm16,Z33_0000_ssss_dsp16,Z33_ddN0_ssss_imm16,Z34_0000_dddd_dsp16,Z34_ssN0_dddd_imm16,Z35_0000_dddd_dsp16,Z35_ssN0_dddd_imm16,
+    Z36_0000_0000,Z36_imm8,Z37_0000_ssss_dsp16,Z37_ddN0_ssss_imm16,Z38_imm8,Z39_ssN0_0000,Z3A_ssss_0000_0000_aaaa_dddd_x000,Z3A_ssss_0001_0000_aaaa_dddd_x000,
+    Z3A_ssss_0010_0000_aaaa_dddd_x000,Z3A_ssss_0011_0000_aaaa_dddd_x000,Z3A_dddd_0100_imm16,Z3A_dddd_0101_imm16,Z3A_ssss_0110_imm16,Z3A_ssss_0111_imm16,Z3A_ssss_1000_0000_aaaa_dddd_x000,Z3A_ssss_1001_0000_aaaa_dddd_x000,
+    Z3A_ssss_1010_0000_aaaa_dddd_x000,Z3A_ssss_1011_0000_aaaa_dddd_x000,Z3B_ssss_0000_0000_aaaa_dddd_x000,Z3B_ssss_0001_0000_aaaa_dddd_x000,Z3B_ssss_0010_0000_aaaa_dddd_x000,Z3B_ssss_0011_0000_aaaa_dddd_x000,Z3B_dddd_0100_imm16,Z3B_dddd_0101_imm16,
+    Z3B_ssss_0110_imm16,Z3B_ssss_0111_imm16,Z3B_ssss_1000_0000_aaaa_dddd_x000,Z3B_ssss_1001_0000_aaaa_dddd_x000,Z3B_ssss_1010_0000_aaaa_dddd_x000,Z3B_ssss_1011_0000_aaaa_dddd_x000,Z3C_ssss_dddd,Z3D_ssss_dddd,
+    Z3E_dddd_ssss,Z3F_dddd_ssss,Z40_0000_dddd_addr,Z40_ssN0_dddd_addr,Z41_0000_dddd_addr,Z41_ssN0_dddd_addr,Z42_0000_dddd_addr,Z42_ssN0_dddd_addr,
+    Z43_0000_dddd_addr,Z43_ssN0_dddd_addr,Z44_0000_dddd_addr,Z44_ssN0_dddd_addr,Z45_0000_dddd_addr,Z45_ssN0_dddd_addr,Z46_0000_dddd_addr,Z46_ssN0_dddd_addr,
+    Z47_0000_dddd_addr,Z47_ssN0_dddd_addr,Z48_0000_dddd_addr,Z48_ssN0_dddd_addr,Z49_0000_dddd_addr,Z49_ssN0_dddd_addr,Z4A_0000_dddd_addr,Z4A_ssN0_dddd_addr,
+    Z4B_0000_dddd_addr,Z4B_ssN0_dddd_addr,Z4C_0000_0000_addr,Z4C_0000_0001_addr_imm8,Z4C_0000_0010_addr,Z4C_0000_0100_addr,Z4C_0000_0101_addr_imm8,Z4C_0000_0110_addr,
+    Z4C_0000_1000_addr,Z4C_ddN0_0000_addr,Z4C_ddN0_0001_addr_imm8,Z4C_ddN0_0010_addr,Z4C_ddN0_0100_addr,Z4C_ddN0_0101_addr_imm8,Z4C_ddN0_0110_addr,Z4C_ddN0_1000_addr,
+    Z4D_0000_0000_addr,Z4D_0000_0001_addr_imm16,Z4D_0000_0010_addr,Z4D_0000_0100_addr,Z4D_0000_0101_addr_imm16,Z4D_0000_0110_addr,Z4D_0000_1000_addr,Z4D_ddN0_0000_addr,
+    Z4D_ddN0_0001_addr_imm16,Z4D_ddN0_0010_addr,Z4D_ddN0_0100_addr,Z4D_ddN0_0101_addr_imm16,Z4D_ddN0_0110_addr,Z4D_ddN0_1000_addr,Z4E_ddN0_ssN0_addr,Z4F_ext,
+    Z50_0000_dddd_addr,Z50_ssN0_dddd_addr,Z51_ddN0_0000_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,
+    Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,
+    Z51_ddN0_ssN0_addr,Z51_ddN0_ssN0_addr,Z52_0000_dddd_addr,Z52_ssN0_dddd_addr,Z53_ddN0_0000_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,
+    Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,
+    Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z53_ddN0_ssN0_addr,Z54_0000_dddd_addr,Z54_ssN0_dddd_addr,Z55_ssN0_0000_addr,Z55_ssN0_ddN0_addr,
+    Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,
+    Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z55_ssN0_ddN0_addr,Z56_0000_dddd_addr,Z56_ssN0_dddd_addr,
+    Z57_ssN0_0000_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,
+    Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,Z57_ssN0_ddN0_addr,
+    Z58_0000_dddd_addr,Z58_ssN0_dddd_addr,Z59_0000_dddd_addr,Z59_ssN0_dddd_addr,Z5A_0000_dddd_addr,Z5A_ssN0_dddd_addr,Z5B_0000_dddd_addr,Z5B_ssN0_dddd_addr,
+    Z5C_0000_0001_0000_dddd_0000_nmin1_addr,Z5C_0000_1000_addr,Z5C_0000_1001_0000_ssss_0000_nmin1_addr,Z5C_ssN0_0001_0000_dddd_0000_nmin1_addr,Z5C_ddN0_1000_addr,Z5C_ddN0_1001_0000_ssN0_0000_nmin1_addr,Z5D_0000_ssss_addr,Z5D_ddN0_ssss_addr,
+    Z5E_0000_cccc_addr,Z5E_ddN0_cccc_addr,Z5F_0000_0000_addr,Z5F_ddN0_0000_addr,Z60_0000_dddd_addr,Z60_ssN0_dddd_addr,Z61_0000_dddd_addr,Z61_ssN0_dddd_addr,
+    Z62_0000_imm4_addr,Z62_ddN0_imm4_addr,Z63_0000_imm4_addr,Z63_ddN0_imm4_addr,Z64_0000_imm4_addr,Z64_ddN0_imm4_addr,Z65_0000_imm4_addr,Z65_ddN0_imm4_addr,
+    Z66_0000_imm4_addr,Z66_ddN0_imm4_addr,Z67_0000_imm4_addr,Z67_ddN0_imm4_addr,Z68_0000_imm4m1_addr,Z68_ddN0_imm4m1_addr,Z69_0000_imm4m1_addr,Z69_ddN0_imm4m1_addr,
+    Z6A_0000_imm4m1_addr,Z6A_ddN0_imm4m1_addr,Z6B_0000_imm4m1_addr,Z6B_ddN0_imm4m1_addr,Z6C_0000_dddd_addr,Z6C_ssN0_dddd_addr,Z6D_0000_dddd_addr,Z6D_ssN0_dddd_addr,
+    Z6E_0000_ssss_addr,Z6E_ddN0_ssss_addr,Z6F_0000_ssss_addr,Z6F_ddN0_ssss_addr,Z70_ssN0_dddd_0000_xxxx_0000_0000,Z71_ssN0_dddd_0000_xxxx_0000_0000,Z72_ddN0_ssss_0000_xxxx_0000_0000,Z73_ddN0_ssss_0000_xxxx_0000_0000,
+    Z74_ssN0_dddd_0000_xxxx_0000_0000,Z75_ssN0_dddd_0000_xxxx_0000_0000,Z76_0000_dddd_addr,Z76_ssN0_dddd_addr,Z77_ddN0_ssss_0000_xxxx_0000_0000,Z78_imm8,Z79_0000_0000_addr,Z79_ssN0_0000_addr,
+    Z7A_0000_0000,Z7B_0000_0000,Z7B_0000_1000,Z7B_0000_1001,Z7B_0000_1010,Z7B_dddd_1101,Z7C_0000_00ii,Z7C_0000_01ii,
+    Z7D_dddd_0ccc,Z7D_dddd_0ccc,Z7D_dddd_0ccc,Z7D_dddd_0ccc,Z7D_dddd_0ccc,Z7D_dddd_0ccc,Z7D_dddd_0ccc,Z7D_dddd_0ccc,
+    Z7D_ssss_1ccc,Z7D_ssss_1ccc,Z7D_ssss_1ccc,Z7D_ssss_1ccc,Z7D_ssss_1ccc,Z7D_ssss_1ccc,Z7D_ssss_1ccc,Z7D_ssss_1ccc,
+    Z7E_imm8,Z7F_imm8,Z80_ssss_dddd,Z81_ssss_dddd,Z82_ssss_dddd,Z83_ssss_dddd,Z84_ssss_dddd,Z85_ssss_dddd,
+    Z86_ssss_dddd,Z87_ssss_dddd,Z88_ssss_dddd,Z89_ssss_dddd,Z8A_ssss_dddd,Z8B_ssss_dddd,Z8C_dddd_0000,Z8C_dddd_0010,
+    Z8C_dddd_0100,Z8C_dddd_0110,Z8C_dddd_0001,Z8C_dddd_1000,Z8C_dddd_1001,Z8D_dddd_0000,Z8D_imm4_0001,Z8D_dddd_0010,
+    Z8D_imm4_0011,Z8D_dddd_0100,Z8D_imm4_0101,Z8D_dddd_0110,Z8D_0000_0111,Z8D_dddd_1000,Z8E_imm8,Z8F_imm8,
+    Z90_ssss_dddd,Z91_ddN0_ssss,Z92_ssss_dddd,Z93_ddN0_ssss,Z94_ssss_dddd,Z95_ssN0_dddd,Z96_ssss_dddd,Z97_ssN0_dddd,
+    Z98_ssss_dddd,Z99_ssss_dddd,Z9A_ssss_dddd,Z9B_ssss_dddd,Z9C_dddd_1000,Z9D_imm8,Z9E_0000_cccc,Z9F_imm8,
+    ZA0_ssss_dddd,ZA1_ssss_dddd,ZA2_dddd_imm4,ZA3_dddd_imm4,ZA4_dddd_imm4,ZA5_dddd_imm4,ZA6_dddd_imm4,ZA7_dddd_imm4,
+    ZA8_dddd_imm4m1,ZA9_dddd_imm4m1,ZAA_dddd_imm4m1,ZAB_dddd_imm4m1,ZAC_ssss_dddd,ZAD_ssss_dddd,ZAE_dddd_cccc,ZAF_dddd_cccc,
+    ZB0_dddd_0000,ZB1_dddd_0000,ZB1_dddd_0111,ZB1_dddd_1010,ZB2_dddd_00I0,ZB2_dddd_0001_imm8,ZB2_dddd_00I0,ZB2_dddd_0011_0000_ssss_0000_0000,
+    ZB2_dddd_01I0,ZB2_dddd_01I0,ZB2_dddd_10I0,ZB2_dddd_1001_imm8,ZB2_dddd_10I0,ZB2_dddd_1011_0000_ssss_0000_0000,ZB2_dddd_11I0,ZB2_dddd_11I0,
+    ZB3_dddd_00I0,ZB3_dddd_0001_imm8,ZB3_dddd_00I0,ZB3_dddd_0011_0000_ssss_0000_0000,ZB3_dddd_01I0,ZB3_dddd_0101_imm8,ZB3_dddd_01I0,ZB3_dddd_0111_0000_ssss_0000_0000,
+    ZB3_dddd_10I0,ZB3_dddd_1001_imm8,ZB3_dddd_10I0,ZB3_dddd_1011_0000_ssss_0000_0000,ZB3_dddd_11I0,ZB3_dddd_1101_imm8,ZB3_dddd_11I0,ZB3_dddd_1111_0000_ssss_0000_0000,
+    ZB4_ssss_dddd,ZB5_ssss_dddd,ZB6_ssss_dddd,ZB7_ssss_dddd,ZB8_ddN0_0000_0000_rrrr_ssN0_0000,ZB8_ddN0_0010_0000_rrrr_ssN0_0000,ZB8_ddN0_0100_0000_rrrr_ssN0_0000,ZB8_ddN0_0110_0000_rrrr_ssN0_1110,
+    ZB8_ddN0_1000_0000_rrrr_ssN0_0000,ZB8_ddN0_1010_0000_rrrr_ssN0_0000,ZB8_ddN0_1100_0000_rrrr_ssN0_0000,ZB8_ddN0_1110_0000_rrrr_ssN0_1110,ZB9_imm8,ZBA_ssN0_0000_0000_rrrr_dddd_cccc,ZBA_ssN0_0001_0000_rrrr_ddN0_x000,ZBA_ssN0_0010_0000_rrrr_ddN0_cccc,
+    ZBA_ssN0_0100_0000_rrrr_dddd_cccc,ZBA_ssN0_0110_0000_rrrr_ddN0_cccc,ZBA_ssN0_1000_0000_rrrr_dddd_cccc,ZBA_ssN0_1001_0000_rrrr_ddN0_x000,ZBA_ssN0_1010_0000_rrrr_ddN0_cccc,ZBA_ssN0_1100_0000_rrrr_dddd_cccc,ZBA_ssN0_1110_0000_rrrr_ddN0_cccc,ZBB_ssN0_0000_0000_rrrr_dddd_cccc,
+    ZBB_ssN0_0001_0000_rrrr_ddN0_x000,ZBB_ssN0_0010_0000_rrrr_ddN0_cccc,ZBB_ssN0_0100_0000_rrrr_dddd_cccc,ZBB_ssN0_0110_0000_rrrr_ddN0_cccc,ZBB_ssN0_1000_0000_rrrr_dddd_cccc,ZBB_ssN0_1001_0000_rrrr_ddN0_x000,ZBB_ssN0_1010_0000_rrrr_ddN0_cccc,ZBB_ssN0_1100_0000_rrrr_dddd_cccc,
+    ZBB_ssN0_1110_0000_rrrr_ddN0_cccc,ZBC_aaaa_bbbb,ZBD_dddd_imm4,ZBE_aaaa_bbbb,ZBF_imm8,ZC_dddd_imm8,ZD_dsp12,ZE_cccc_dsp8,
+    ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,
+    ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,ZF_dddd_0dsp7,
+    ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,
+    ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,ZF_dddd_1dsp7,
+};
+static Z8K_DATA uint16_t z8000_exec_cyc[520] = {
+    4,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,12,11,12,8,7,11,8,
+    12,11,12,8,11,11,8,12,10,10,14,14,20,14,14,13,11,11,19,14,14,12,282,282,70,70,744,744,107,107,11,13,
+    11,11,10,10,7,7,7,7,10,11,10,11,10,11,10,11,10,8,10,8,11,11,11,11,12,12,8,8,14,14,14,14,
+    14,14,14,14,15,15,17,17,2,10,17,17,10,12,21,21,21,21,10,10,12,12,21,21,21,21,21,21,21,21,12,12,
+    12,12,21,21,21,21,10,10,12,12,9,10,9,10,9,10,9,10,9,10,9,10,9,10,9,10,9,10,9,10,9,10,
+    9,10,15,14,15,11,14,14,11,16,15,16,12,15,15,12,15,14,15,11,14,14,11,16,15,16,12,15,15,12,12,10,
+    15,16,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,15,16,14,14,14,14,14,14,14,14,14,14,14,14,
+    14,14,14,14,12,13,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,15,16,16,16,16,16,16,16,16,16,
+    16,16,16,16,16,16,16,16,283,284,71,72,745,746,108,109,14,16,14,15,17,15,15,14,7,8,12,13,9,10,9,10,
+    13,14,13,14,13,14,13,14,10,11,10,11,13,14,13,14,13,14,13,14,15,16,15,16,11,11,11,12,14,14,14,14,
+    15,17,12,13,17,10,16,17,8,13,5,5,7,12,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    10,33,4,4,4,4,4,4,4,4,4,4,4,4,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,10,10,
+    8,12,8,9,5,12,8,8,282,70,744,107,13,10,10,10,3,3,4,4,4,4,4,4,4,4,4,4,6,6,5,5,
+    5,11,11,11,6,13,6,15,6,6,9,13,9,15,9,9,6,13,6,15,6,13,6,15,6,13,6,15,6,13,6,15,
+    5,5,5,5,25,25,25,25,25,25,25,25,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,
+    11,9,5,9,10,5,10,6,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,
+    11,11,11,11,11,11,11,11,
 };
 #ifdef Z8K_PROFILE
 static const char *const op_names[] = {
