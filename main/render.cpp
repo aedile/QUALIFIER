@@ -17,10 +17,16 @@
 static const char *TAG = "RENDER";
 #define ROWS_PER_CHUNK 14
 #define NUM_FB 1
+/* ORIENTATION_PORTRAIT 1: medal upright. The 256x224 picture is shown pixel for pixel,
+ * 8 columns trimmed from each side (nothing lives there) and centred with 28-row bars.
+ * 0: medal sideways (landscape), the picture rotated with 12/8-pixel margins. */
+#define ORIENTATION_PORTRAIT 1
 #define X_MARGIN 12           /* (280 - 256) / 2 along the long axis */
 #define Y_MARGIN 8            /* (240 - 224) / 2 along the short axis */
 #define FLIP_X 0
 #define FLIP_Y 1
+#define PORTRAIT_TRIM ((PP_FB_W - DISPLAY_WIDTH) / 2)        /* 8 */
+#define PORTRAIT_TOP  ((DISPLAY_HEIGHT - PP_FB_H) / 2)       /* 28 */
 
 static uint8_t *fbs[NUM_FB];
 static QueueHandle_t free_q, frame_q;
@@ -37,6 +43,13 @@ static void present(const uint8_t *fb)
         uint32_t c0 = esp_cpu_get_cycle_count();
         for (int r = 0; r < rows; r++) {
             int py = row + r;
+#if ORIENTATION_PORTRAIT
+            int gy = py - PORTRAIT_TOP;
+            if (gy < 0 || gy >= PP_FB_H) { for (int px = 0; px < DISPLAY_WIDTH; px++) *dst++ = 0; continue; }
+            const uint8_t *srow = fb + gy * PP_FB_W + PORTRAIT_TRIM;
+            for (int px = 0; px < DISPLAY_WIDTH; px++) *dst++ = pal_swapped[*srow++];
+            continue;
+#endif
             int gx = py - X_MARGIN;
 #if FLIP_X
             gx = PP_FB_W - 1 - gx;

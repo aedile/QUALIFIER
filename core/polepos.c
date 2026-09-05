@@ -156,10 +156,20 @@ static uint8_t n51_read(void)
 }
 
 /* ---- 53XX: steering wheel position and DSWA (pre-MCU model: ports in1_l, in1_h, dipA_l, dipA_h) ---- */
+/* The wheel is a quadrature encoder that the MCU counts; each Z80 read sees the count move by at
+ * most one step (MAME's model hands over one count per read). The tilt control can jump the
+ * requested position by tens of counts in one frame, and the game's steering code does not
+ * cope with that, so the reported position walks toward the requested one a count per read. */
+static uint8_t n53_steer_out;
 static uint8_t n53_read(void)
 {
     switch ((n53_count++) % 8) {
-        case 0: return input.steer;
+        case 0: {
+            DBG(if (getenv("STEER_RAW")) return input.steer;)
+            int8_t d = (int8_t)(input.steer - n53_steer_out);
+            if (d > 0) n53_steer_out++; else if (d < 0) n53_steer_out--;
+            return n53_steer_out;
+        }
         case 4: return dswa;
         default: return 0xff;      /* polepos2 hangs if 0 is returned */
     }
@@ -366,7 +376,7 @@ void pp_reset(void)
     pp_hscroll = pp_road_vscroll = 0; pp_chacl = 0;
     latch = 0; scanline = 0; z80_irq_pending = 0; sub_irq_mask = 0; adc_done = 0;
     n06_ctrl = 0; n06_nmi_countdown = -1;
-    memset(&n51, 0, sizeof(n51)); n53_count = 0;
+    memset(&n51, 0, sizeof(n51)); n53_count = 0; n53_steer_out = 128;
     ResetZ80(&z80); z80.IAutoReset = 1; z80.TrapBadOps = 0;
     z8k_reset(&sub[0]); z8k_reset(&sub[1]);
     pp_sound_reset();
