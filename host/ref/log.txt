@@ -1,0 +1,432 @@
+  [f0 l0] z80 RESTART at 0000, previous slice pc 0000, SP F000, IFF 00
+  [f0 l0] z80 latch bit0 <- 0 (pc 0905)
+  [f0 l0] z80 latch bit4 <- 0 (pc 0908)
+  [f0 l0] z80 latch bit5 <- 0 (pc 090B)
+  [f0 l0] z80 latch bit1 <- 0 (pc 090E)
+  [f0 l0] z80 latch bit7 <- 0 (pc 0911)
+  [f0 l0] z80 latch bit6 <- 0 (pc 0914)
+t=0.00s saved frame 0  z80=093F sub1=0000 sub2=0000 latch=00
+t=1s idle%: z80 0 sub1 0 sub2 0  pcs 103B 0000 0000 latch 00
+    irq 0 nmi 0 nvi 0 n51r 0 n53r 0 adc w/r 0/0
+t=1.01s saved frame 1  z80=104C sub1=0000 sub2=0000 latch=00
+  [f87] step -> 1059
+  [f89] step -> 0992
+  [f97] step -> 0E8F
+  [f97 l153] z80 wr 4048 <- 01 (pc 0E9C)
+  [f97 l153] z80 latch bit4 <- 1 (pc 0E9D)
+t=2s idle%: z80 0 sub1 0 sub2 0  pcs 0EA7 339E 0000 latch 10
+    irq 0 nmi 0 nvi 0 n51r 0 n53r 0 adc w/r 0/0
+t=2.01s saved frame 2  z80=0EAA sub1=33D6 sub2=0000 latch=10
+  [f168 l171] sub1 wr 8092 <- 0000 (pc 34BC)
+  [f168 l171] sub1 wr 8090 <- 0000 (pc 34C0)
+  [f168 l172] z80 rd 4049 -> 00 (pc 0EBB)
+  [f168] step -> 0E94
+  [f168 l172] z80 wr 4048 <- 01 (pc 0E9C)
+  [f168 l173] z80 latch bit5 <- 1 (pc 0E9D)
+t=3s idle%: z80 0 sub1 0 sub2 0  pcs 0EA4 34CA 28FA latch 30
+    irq 0 nmi 0 nvi 0 n51r 0 n53r 0 adc w/r 0/0
+t=3.00s saved frame 3  z80=0EA7 sub1=34C6 sub2=2924 latch=30
+  [f239 l191] sub2 wr 8094 <- 0000 (pc 29BC)
+  [f239 l191] sub2 wr 8092 <- 0000 (pc 29C0)
+  [f239 l191] sub2 wr 8090 <- 0000 (pc 29C4)
+  [f239 l192] z80 rd 4049 -> 00 (pc 0EBB)
+  [f239] step -> 09E1
+  [f239 l200] z80 wr 4048 <- 00 (pc 09EF)
+  [f239 l200] z80 rd 4048 -> 00 (pc 09EF)
+  [f239 l200] z80 wr 4049 <- 00 (pc 09EF)
+  [f239 l201] z80 rd 4049 -> 00 (pc 09EF)
+  [f239 l201] z80 wr 404A <- 00 (pc 09EF)
+  [f239 l201] z80 rd 404A -> 00 (pc 09EF)
+  [f239 l201] z80 wr 404B <- 00 (pc 09EF)
+  [f239 l201] z80 rd 404B -> 00 (pc 09EF)
+t=4s idle%: z80 0 sub1 0 sub2 0  pcs 09ED 34D8 29CC latch 30
+    irq 0 nmi 0 nvi 0 n51r 0 n53r 0 adc w/r 0/0
+  [f242 l179] z80 latch bit2 <- 1 (pc 0A3A)
+  [f242] step -> 0EC8
+  [f242 l180] z80 latch bit1 <- 1 (pc 0ECD)
+t=4.01s saved frame 4  z80=0EF4 sub1=34D0 sub2=29C4 latch=36
+  [f245] step -> 0F01
+  [f245 l55] z80 latch bit0 <- 0 (pc 0F07)
+  [f245 l55] z80 latch bit0 <- 1 (pc 0F0B)
+  [f245] step -> 0F0D
+  [f245] z80 alpha wr(early) 4C00 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C01 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C02 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C03 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C04 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C05 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C06 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C07 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C08 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C09 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C0A <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C0B <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C0C <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C0D <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C0E <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C0F <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C10 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C11 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C12 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C13 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C14 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C15 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C16 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C17 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C18 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C19 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C1A <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C1B <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C1C <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C1D <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C1E <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C1F <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C20 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C21 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C22 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C23 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C24 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C25 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C26 <- 24 (pc 0F14)
+  [f245] z80 alpha wr(early) 4C27 <- 24 (pc 0F14)
+  [f245 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f245 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f245 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f245 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f245 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f245 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f245 l216] z80 latch bit3 <- 1 (pc 025F)
+  [f245 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f246 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f246 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f246 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f246 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f246] step -> 10E7
+  [f246] step -> 0A54
+  [f246 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f246 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f246 l216] z80 latch bit3 <- 1 (pc 025F)
+  [f246 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f247 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f247 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f247 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f247 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f247 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f247 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f247 l216] z80 latch bit3 <- 1 (pc 025F)
+  [f247 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f248 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f248 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f248 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f248 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f248 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f248 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f248 l216] z80 latch bit3 <- 1 (pc 025F)
+  [f248 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f249 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f249 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f249 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f249 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f249 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f249 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f249 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f249 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f250 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f250 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f250 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f250 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f250 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f250 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f250 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f250 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f251 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f251 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f251 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f251 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f251 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f251 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f251 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f251 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f252 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f252 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f252 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f252 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f252 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f252 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f252 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f252 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f253 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f253 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f253 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f253 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f253 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f253 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f253 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f253 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f253] step -> 0A5B
+  [f254 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f254 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f254 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f254 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f254 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f254 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f254 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f254 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f254] step -> 0A66
+  [f254] step -> 0A9C
+  [f254] step -> 0B1B
+  [f254] step -> 0B27
+  [f254] step -> 0B33
+  [f254] step -> 0B3F
+  [f254] step -> 0B5B
+  [f254] step -> 0C7E
+  [f255] step -> 0C43
+  [f255] step -> 0CAE
+  [f255] step -> 0CBF
+  [f255] step -> 0CD1
+  [f255] step -> 0CDE
+  [f255] step -> 0CEB
+  [f255] step -> 0D56
+  [f255] step -> 0D8B
+  [f255 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f255 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f255 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f255 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f255 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f255 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f255 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f255 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f256 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f256 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f256 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f256 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f256 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f256 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f256 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f256 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f257 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f257 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f257 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f257 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f257 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f257 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f257 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f257 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f258 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f258 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f258 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f258 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f258 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f258 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f258 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f258 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f259 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f259 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f259 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f259 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f259 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f259 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f259 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f259 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f260 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f260 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f260 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f260 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f260 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f260 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f260 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f260 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f261 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f261 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f261 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f261 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f261 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f261 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f261 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f261 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f261] step -> 0DC7
+  [f261] step -> 0F1B
+  [f261] step -> 0F32
+  [f262 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f262 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f262 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f262 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f262 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f262 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f262 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f262 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f263 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f263 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f263 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f263 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f263 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f263 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f263 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f263 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f263] step -> 0BEB
+  [f263] step -> 0A4C
+  [f264 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f264 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f264 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f264 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f264 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f264 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f264 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f264 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f265 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f265 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f265 l84] z80 latch bit3 <- 0 (pc 022C)
+  [f265 l85] z80 latch bit0 <- 1 (pc 0155)
+  [f265 l192] z80 latch bit0 <- 0 (pc 0115)
+  [f265 l192] z80 latch bit7 <- 1 (pc 0119)
+  [f265 l215] z80 latch bit3 <- 1 (pc 025F)
+  [f265 l216] z80 latch bit0 <- 1 (pc 0155)
+  [f266 l64] z80 latch bit0 <- 0 (pc 0115)
+  [f266 l64] z80 latch bit7 <- 1 (pc 0119)
+  [f266 l84] z80 latch bit3 <- 0 (pc 022C)
+t=5s idle%: z80 53 sub1 0 sub2 0  pcs 0A62 34D4 29C8 latch BF
+    irq 112 nmi 2018 nvi 0 n51r 336 n53r 896 adc w/r 112/112
+t=5.02s saved frame 5  z80=0A62 sub1=34D8 sub2=29CC latch=BF
+  [f323] step -> 0A5B
+  [f324] step -> 0F4C
+  [f324] step -> 0F55
+  [f326] step -> 0F63
+  [f326] 06XX ctrl <- A1 (z80 pc 0F76)
+  [f326] 06XX data <- 01 (ctrl A1) n51 mode 0
+  [f326] 06XX data <- 01 (ctrl A1) n51 mode 0
+  [f326] 06XX data <- 01 (ctrl A1) n51 mode 0
+  [f326] 06XX data <- 01 (ctrl A1) n51 mode 0
+  [f326] 06XX data <- 01 (ctrl A1) n51 mode 0
+  [f326] 06XX data <- 02 (ctrl A1) n51 mode 0
+  [f326] 06XX data <- 03 (ctrl A1) n51 mode 1
+  [f326] 06XX data <- 03 (ctrl A1) n51 mode 1
+  [f326] step -> 0F7F
+  [f326] 06XX ctrl <- 91 (z80 pc 0F95)
+  06XX 51xx -> 00 (z80 pc 0069)
+  06XX 51xx -> 3B (z80 pc 0069)
+  06XX 51xx -> 36 (z80 pc 0069)
+  [f326] step -> 0E79
+  [f326] z80 alpha wr 4C00 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C01 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C02 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C03 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C04 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C05 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C06 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C07 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C08 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C09 <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C0A <- 24 (pc 00AB)
+  [f326] z80 alpha wr 4C0B <- 24 (pc 00AB)
+t=6s idle%: z80 28 sub1 0 sub2 0  pcs 02E8 00C8 0842 latch BF
+    irq 229 nmi 4141 nvi 35 n51r 690 n53r 1832 adc w/r 229/229
+t=6.01s saved frame 6  z80=031B sub1=00C8 sub2=0842 latch=FF
+  [f366 l83] z80 RESTART at 0010, previous slice pc 22C1, SP 82E8, IFF 02
+  [f369 l220] z80 RESTART at 0010, previous slice pc 008C, SP 82E6, IFF 02
+  [f370 l97] z80 RESTART at 0010, previous slice pc 2389, SP 82E8, IFF 02
+  [f370 l217] z80 RESTART at 0010, previous slice pc 22A2, SP 82E8, IFF 02
+  [f371 l79] z80 RESTART at 0010, previous slice pc 222E, SP 82E6, IFF 02
+  [f371 l89] z80 RESTART at 0010, previous slice pc 22A2, SP 82E6, IFF 02
+  [f371 l225] z80 RESTART at 0010, previous slice pc 2389, SP 82E6, IFF 02
+t=7s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 00C8 0842 latch BF
+    irq 349 nmi 6301 nvi 95 n51r 1050 n53r 2792 adc w/r 349/349
+t=7.01s saved frame 7  z80=00B1 sub1=00D2 sub2=0842 latch=BF
+t=8s idle%: z80 0 sub1 0 sub2 0  pcs 00B4 00C8 0842 latch BF
+    irq 469 nmi 8461 nvi 155 n51r 1410 n53r 3752 adc w/r 469/469
+t=8.00s saved frame 8  z80=0282 sub1=00D2 sub2=0842 latch=BF
+t=9s idle%: z80 0 sub1 0 sub2 0  pcs 0282 00E2 0842 latch BF
+    irq 589 nmi 10621 nvi 215 n51r 1770 n53r 4712 adc w/r 589/589
+t=9.01s saved frame 9  z80=027F sub1=00E2 sub2=0842 latch=BF
+t=10s idle%: z80 0 sub1 0 sub2 0  pcs 0278 00C8 0842 latch BF
+    irq 709 nmi 12781 nvi 275 n51r 2130 n53r 5672 adc w/r 709/709
+t=10.02s saved frame 10  z80=027F sub1=00E0 sub2=0842 latch=BF
+t=11s idle%: z80 0 sub1 0 sub2 0  pcs 027B 3548 1B8C latch BF
+    irq 829 nmi 14944 nvi 335 n51r 2490 n53r 6632 adc w/r 829/829
+t=11.01s saved frame 11  z80=02AE sub1=353C sub2=1B8C latch=BF
+t=12s idle%: z80 0 sub1 0 sub2 0  pcs 02B4 3548 1B8C latch BF
+    irq 949 nmi 17104 nvi 395 n51r 2850 n53r 7592 adc w/r 949/949
+t=12.01s saved frame 12  z80=027B sub1=3548 sub2=1B8C latch=BF
+t=13s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 3548 1B88 latch BF
+    irq 1069 nmi 19264 nvi 455 n51r 3210 n53r 8552 adc w/r 1069/1069
+t=13.00s saved frame 13  z80=02B1 sub1=3548 sub2=1B88 latch=BF
+t=14s idle%: z80 0 sub1 0 sub2 0  pcs 00B4 35BC 07FA latch BF
+    irq 1189 nmi 21424 nvi 515 n51r 3570 n53r 9512 adc w/r 1189/1189
+t=14.01s saved frame 14  z80=00B4 sub1=3598 sub2=07FA latch=BF
+t=15s idle%: z80 0 sub1 0 sub2 0  pcs 02AF 2596 080C latch BF
+    irq 1309 nmi 23584 nvi 575 n51r 3930 n53r 10472 adc w/r 1309/1309
+t=15.01s saved frame 15  z80=02AE sub1=2516 sub2=0810 latch=BF
+t=16s idle%: z80 0 sub1 0 sub2 0  pcs 027B 25AC 0836 latch BF
+    irq 1429 nmi 25744 nvi 635 n51r 4290 n53r 11432 adc w/r 1429/1429
+t=16.00s saved frame 16  z80=027B sub1=2516 sub2=083A latch=BF
+t=17s idle%: z80 0 sub1 0 sub2 0  pcs 02AE 2056 083A latch BF
+    irq 1549 nmi 27904 nvi 695 n51r 4650 n53r 12392 adc w/r 1549/1549
+t=17.01s saved frame 17  z80=027B sub1=2056 sub2=0838 latch=BF
+t=18s idle%: z80 0 sub1 0 sub2 0  pcs 02B4 2056 083E latch BF
+    irq 1669 nmi 30064 nvi 755 n51r 5010 n53r 13352 adc w/r 1669/1669
+t=18.00s saved frame 18  z80=02AF sub1=2056 sub2=083E latch=BF
+t=19s idle%: z80 0 sub1 0 sub2 0  pcs 00B4 2056 0846 latch BF
+    irq 1789 nmi 32224 nvi 815 n51r 5370 n53r 14312 adc w/r 1789/1789
+t=19.01s saved frame 19  z80=02AF sub1=2056 sub2=083E latch=BF
+t=20s idle%: z80 0 sub1 0 sub2 0  pcs 0278 2056 0848 latch BF
+    irq 1909 nmi 34384 nvi 875 n51r 5730 n53r 15272 adc w/r 1909/1909
+t=20.01s saved frame 20  z80=02AF sub1=204E sub2=0838 latch=BF
+t=21s idle%: z80 0 sub1 0 sub2 0  pcs 027B 2056 0810 latch BF
+    irq 2029 nmi 36544 nvi 935 n51r 6090 n53r 16232 adc w/r 2029/2029
+t=21.00s saved frame 21  z80=02B4 sub1=2052 sub2=0846 latch=BF
+t=22s idle%: z80 0 sub1 0 sub2 0  pcs 02AF 2056 083E latch BF
+    irq 2149 nmi 38704 nvi 995 n51r 6450 n53r 17192 adc w/r 2149/2149
+t=22.01s saved frame 22  z80=02B5 sub1=2056 sub2=0810 latch=BF
+t=23s idle%: z80 0 sub1 0 sub2 0  pcs 02B4 2056 0842 latch BF
+    irq 2269 nmi 40864 nvi 1055 n51r 6810 n53r 18152 adc w/r 2269/2269
+t=23.00s saved frame 23  z80=00B1 sub1=2056 sub2=0810 latch=BF
+t=24s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 2640 0848 latch BF
+    irq 2389 nmi 43024 nvi 1115 n51r 7170 n53r 19112 adc w/r 2389/2389
+t=24.01s saved frame 24  z80=00B1 sub1=25C8 sub2=083E latch=BF
+t=25s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 24E2 0810 latch BF
+    irq 2509 nmi 45190 nvi 1175 n51r 7530 n53r 20072 adc w/r 2509/2509
+t=25.01s saved frame 25  z80=00B4 sub1=24BE sub2=0838 latch=BF
+t=26s idle%: z80 0 sub1 0 sub2 0  pcs 027B 2516 0842 latch BF
+    irq 2629 nmi 47350 nvi 1235 n51r 7890 n53r 21032 adc w/r 2629/2629
+t=26.00s saved frame 26  z80=0278 sub1=2508 sub2=0842 latch=BF
+t=27s idle%: z80 0 sub1 0 sub2 0  pcs 02AE 2036 178C latch BF
+    irq 2749 nmi 49510 nvi 1295 n51r 8250 n53r 21992 adc w/r 2749/2749
+t=27.01s saved frame 27  z80=027D sub1=25B8 sub2=0810 latch=BF
+t=28s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 25CC 0846 latch BF
+    irq 2869 nmi 51670 nvi 1355 n51r 8610 n53r 22952 adc w/r 2869/2869
+t=28.00s saved frame 28  z80=027B sub1=25CC sub2=083C latch=BF
+t=29s idle%: z80 0 sub1 0 sub2 0  pcs 02AF 2654 0836 latch BF
+    irq 2989 nmi 53830 nvi 1415 n51r 8970 n53r 23912 adc w/r 2989/2989
+t=29.01s saved frame 29  z80=027D sub1=2654 sub2=083C latch=BF
+t=30s idle%: z80 0 sub1 0 sub2 0  pcs 02B5 2650 0810 latch BF
+    irq 3109 nmi 55990 nvi 1475 n51r 9330 n53r 24872 adc w/r 3109/3109
+t=30.01s saved frame 30  z80=00B1 sub1=2644 sub2=083C latch=BF
+t=31s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 2646 083A latch BF
+    irq 3229 nmi 58150 nvi 1535 n51r 9690 n53r 25832 adc w/r 3229/3229
+t=31.00s saved frame 31  z80=02B4 sub1=2640 sub2=083A latch=BF
+t=32s idle%: z80 0 sub1 0 sub2 0  pcs 02AE 2032 083A latch BF
+    irq 3349 nmi 60310 nvi 1595 n51r 10050 n53r 26792 adc w/r 3349/3349
+t=32.01s saved frame 32  z80=00B1 sub1=203A sub2=083A latch=BF
+t=33s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 2036 083C latch BF
+    irq 3469 nmi 62470 nvi 1655 n51r 10410 n53r 27752 adc w/r 3469/3469
+t=33.00s saved frame 33  z80=02AE sub1=203A sub2=0842 latch=BF
+t=34s idle%: z80 0 sub1 0 sub2 0  pcs 02AE 203A 0846 latch BF
+    irq 3589 nmi 64630 nvi 1715 n51r 10770 n53r 28712 adc w/r 3589/3589
+t=34.01s saved frame 34  z80=027D sub1=266C sub2=0836 latch=BF
+t=35s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 203A 083C latch BF
+    irq 3709 nmi 66790 nvi 1775 n51r 11130 n53r 29672 adc w/r 3709/3709
+t=35.01s saved frame 35  z80=0278 sub1=203A sub2=083E latch=BF
+t=36s idle%: z80 0 sub1 0 sub2 0  pcs 02AE 203A 083C latch BF
+    irq 3829 nmi 68950 nvi 1835 n51r 11490 n53r 30632 adc w/r 3829/3829
+t=36.00s saved frame 36  z80=02B4 sub1=203A sub2=083C latch=BF
+t=37s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 2036 0846 latch BF
+    irq 3949 nmi 71110 nvi 1895 n51r 11850 n53r 31592 adc w/r 3949/3949
+t=37.01s saved frame 37  z80=02AF sub1=203A sub2=0846 latch=BF
+t=38s idle%: z80 0 sub1 0 sub2 0  pcs 02AE 2036 0810 latch BF
+    irq 4069 nmi 73270 nvi 1955 n51r 12210 n53r 32552 adc w/r 4069/4069
+t=38.02s saved frame 38  z80=02AE sub1=203A sub2=083A latch=BF
+t=39s idle%: z80 0 sub1 0 sub2 0  pcs 00B1 203A 083A latch BF
+    irq 4189 nmi 75430 nvi 2015 n51r 12570 n53r 33512 adc w/r 4189/4189
+t=39.01s saved frame 39  z80=00B1 sub1=203A sub2=0846 latch=BF
+t=40s idle%: z80 0 sub1 0 sub2 0  pcs 02AE 2674 0812 latch BF
+    irq 4309 nmi 77590 nvi 2075 n51r 12930 n53r 34472 adc w/r 4309/4309
+done: 40.0s, 2424 frames, 40 images

@@ -27,17 +27,24 @@ static inline int fb_row(int y) { return (y >= 16 && y < 240) ? y - 16 : -1; }
 
 static void draw_background(uint8_t *fb)
 {
-    /* 64x16 tiles, column-major, scrolled by hscroll, only the top half of the screen */
-    for (int y = 16; y < 128; y++) {
-        uint8_t *row = fb + (y - 16) * PP_FB_W;
-        int trow = y >> 3, yin = y & 7;
-        for (int x = 0; x < PP_FB_W; x++) {
-            int sx = (x + pp_hscroll) & 0x1ff;
-            uint16_t w = pp_view16[((sx >> 3) << 4) + trow];
+    /* 64x16 tiles, column-major, scrolled by hscroll; only native rows 16..127 are visible */
+    int xoff = pp_hscroll & 7;
+    int col0 = pp_hscroll >> 3;
+    for (int trow = 2; trow < 16; trow++) {
+        uint8_t *rowbase = fb + (trow * 8 - 16) * PP_FB_W;
+        for (int c = 0; c <= 32; c++) {
+            int sx = c * 8 - xoff;
+            uint16_t w = pp_view16[(((col0 + c) & 63) << 4) + trow];
             int code = (w & 0xff) | ((w & 0x4000) >> 6);
-            int color = (w >> 8) & 0x3f;
-            uint8_t pix = R->tiles[code * 64 + yin * 8 + (sx & 7)];
-            row[x] = P[0x400 + color * 4 + pix] & 0x0f;
+            const uint8_t *pl = P + 0x400 + ((w >> 8) & 0x3f) * 4;
+            uint8_t pens[4] = { (uint8_t)(pl[0] & 0x0f), (uint8_t)(pl[1] & 0x0f), (uint8_t)(pl[2] & 0x0f), (uint8_t)(pl[3] & 0x0f) };
+            const uint8_t *src = R->tiles + code * 64;
+            int x0 = sx < 0 ? -sx : 0, x1 = sx + 8 > PP_FB_W ? PP_FB_W - sx : 8;
+            for (int y = 0; y < 8; y++) {
+                uint8_t *dst = rowbase + y * PP_FB_W + sx;
+                const uint8_t *sr = src + y * 8;
+                for (int x = x0; x < x1; x++) dst[x] = pens[sr[x]];
+            }
         }
     }
 }
@@ -52,13 +59,15 @@ static void draw_road(uint8_t *fb)
         uint8_t *dest = scan;
         int yoffs = ((vpos_mod[y] + pp_road_vscroll) >> 3) & 0x1ff;
         int roadpal = pp_road16[yoffs] & 15;
-        int pen_base = roadpal << 6;
+        const uint8_t *rp = P + 0x800 + (roadpal << 6);
+        uint8_t pen[64];
+        for (int i = 0; i < 64; i++) pen[i] = (uint8_t)(0x40 + (rp[i] & 0x0f));
         int xoffs = pp_road16[0x380 + (y & 0x7f)] & 0x3ff;
         int xscroll = xoffs & 7;
         xoffs &= ~7;
         for (int x = 0; x < 256 / 8 + 1; x++, xoffs += 8) {
             if (xoffs & 0x200) {
-                for (int i = 0; i < 8; i++) *dest++ = (uint8_t)(pen_base | 0);
+                for (int i = 0; i < 8; i++) *dest++ = pen[0];
             } else {
                 int romoffs = ((y & 0x07f) << 6) + ((xoffs & 0x1f8) >> 3);
                 int control = R->road[romoffs];
@@ -69,13 +78,12 @@ static void draw_road(uint8_t *fb)
                 for (int i = 8; i > 0; i--) {
                     int bits = ((bits1 >> i) & 1) + (((bits2 >> i) & 1) << 1);
                     if (!carin && bits) bits++;
-                    *dest++ = (uint8_t)(pen_base | (roadval & 0x3f));
+                    *dest++ = pen[roadval & 0x3f];
                     roadval += bits;
                 }
             }
         }
-        uint8_t *row = fb + fy * PP_FB_W;
-        for (int x = 0; x < 256; x++) row[x] = (uint8_t)(0x40 + (P[0x800 + scan[x + xscroll]] & 0x0f));
+        memcpy(fb + fy * PP_FB_W, scan + xscroll, 256);
     }
 }
 
@@ -85,7 +93,11 @@ static void zoom_sprite(uint8_t *fb, int big, int code, int color, int flipx, in
     int rowbytes = big ? 32 : 16;
     const uint8_t *lut = P + 0xc00 + (color & 0x3f) * 16;
     uint8_t bank = (color & 0x40) ? 0x50 : 0x10;
+    uint8_t pent[16];
+    for (int i = 0; i < 16; i++) { uint8_t v = lut[i] & 0x0f; pent[i] = (v == 15) ? 0xff : (uint8_t)(bank + v); }
     int offsxor = flipx ? (big ? 0x1f : 0x0f) : 0;
+    int width = big ? 64 : 32;
+    if ((sx & 0x3ff) >= 0x100 && (sx & 0x3ff) + width <= 0x400) return;   /* entirely off screen */
     for (int y = 0; y <= sizey; y++) {
         int yy = (sy + y) & 0x1ff;
         if (yy >= 0x10 && yy < 0xf0) {
@@ -96,9 +108,8 @@ static void zoom_sprite(uint8_t *fb, int big, int code, int color, int flipx, in
             uint8_t *row = fb + (yy - 16) * PP_FB_W;
             for (int x = (big ? 0x40 : 0x20); x > 0; x--) {
                 if (xx < 0x100) {
-                    int pen = src[(offs / 2) ^ offsxor];
-                    uint8_t v = lut[pen] & 0x0f;
-                    if (v != 15) row[xx] = (uint8_t)(bank + v);
+                    uint8_t t = pent[src[(offs >> 1) ^ offsxor]];
+                    if (t != 0xff) row[xx] = t;
                 }
                 offs++;
                 siz = siz + 1 + sizex;
@@ -135,12 +146,15 @@ static void draw_text(uint8_t *fb)
             if (!pp_chacl) { code &= 0xff; color = 0; }
             const uint8_t *lut = P + 0x300 + color * 4;
             uint8_t bank = (idx >= 32 * 16) ? 0x60 : 0x20;
+            uint8_t pens[4]; int opaque = 0;
+            for (int i = 0; i < 4; i++) { uint8_t v = lut[i] & 0x0f; pens[i] = (v == 15) ? 0xff : (uint8_t)(bank + v); opaque |= (v != 15); }
+            if (!opaque) continue;
             const uint8_t *src = R->chars + code * 64;
             uint8_t *dst = fb + (trow * 8 - 16) * PP_FB_W + tcol * 8;
             for (int y = 0; y < 8; y++) {
                 for (int x = 0; x < 8; x++) {
-                    uint8_t v = lut[src[y * 8 + x]] & 0x0f;
-                    if (v != 15) dst[x] = (uint8_t)(bank + v);
+                    uint8_t t = pens[src[y * 8 + x]];
+                    if (t != 0xff) dst[x] = t;
                 }
                 dst += PP_FB_W;
             }
