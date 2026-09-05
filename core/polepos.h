@@ -18,6 +18,9 @@ extern "C" {
 #define PP_CPU_CLOCK        3072000
 #define PP_LINES            264
 #define PP_CYCLES_PER_LINE  192
+#ifndef PP_SLICE_LINES
+#define PP_SLICE_LINES      4        /* CPUs are interleaved every 4 lines (IRQ/NVI lines are multiples of 4) */
+#endif
 #define PP_CYCLES_PER_FRAME (PP_LINES * PP_CYCLES_PER_LINE)   /* 60.6 Hz */
 #define PP_FB_W 256
 #define PP_FB_H 224          /* native rows 16..239 */

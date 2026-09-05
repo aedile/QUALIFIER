@@ -7,6 +7,7 @@
 #include "display.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_cpu.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -25,7 +26,7 @@ static uint8_t *fbs[NUM_FB];
 static QueueHandle_t free_q, frame_q;
 static uint16_t *chunk;
 static uint16_t pal_swapped[256];
-static uint32_t frames_drawn, frames_dropped;
+static uint32_t frames_drawn, frames_dropped, present_cycles;
 
 static void present(const uint8_t *fb)
 {
@@ -33,6 +34,7 @@ static void present(const uint8_t *fb)
     for (int row = 0; row < DISPLAY_HEIGHT; row += ROWS_PER_CHUNK) {
         int rows = (row + ROWS_PER_CHUNK <= DISPLAY_HEIGHT) ? ROWS_PER_CHUNK : (DISPLAY_HEIGHT - row);
         uint16_t *dst = chunk;
+        uint32_t c0 = esp_cpu_get_cycle_count();
         for (int r = 0; r < rows; r++) {
             int py = row + r;
             int gx = py - X_MARGIN;
@@ -50,6 +52,7 @@ static void present(const uint8_t *fb)
 #endif
             for (int px = 0; px < DISPLAY_WIDTH - Y_MARGIN - PP_FB_H; px++) *dst++ = 0;
         }
+        present_cycles += esp_cpu_get_cycle_count() - c0;
         display_write_preswapped(chunk, rows * DISPLAY_WIDTH);
     }
     display_wait_done();
@@ -96,3 +99,4 @@ uint8_t *render_acquire(void)
 void render_submit(uint8_t *fb) { xQueueSend(frame_q, &fb, 0); }
 uint32_t render_frames_drawn(void) { uint32_t v = frames_drawn; frames_drawn = 0; return v; }
 uint32_t render_frames_dropped(void) { uint32_t v = frames_dropped; frames_dropped = 0; return v; }
+uint32_t render_present_us(void) { uint32_t v = present_cycles / CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ; present_cycles = 0; return v; }

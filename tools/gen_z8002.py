@@ -78,6 +78,10 @@ header = r'''/*
 #ifndef Z8K_HOT
 #define Z8K_HOT            /* placement attribute for hot handlers (IRAM_ATTR on the ESP32) */
 #endif
+#ifndef Z8K_DATA
+#define Z8K_DATA           /* placement attribute for the dispatch tables (DRAM_ATTR on the ESP32: the
+                              compiler would otherwise move these never-written statics into flash rodata) */
+#endif
 
 static z8k_t Zs;               /* the CPU being run; z8k_run copies the caller's state in and out */
 #define Z (&Zs)
@@ -87,23 +91,44 @@ uint32_t z8k_op_count[600];
 const char *z8k_op_name(int i);
 #endif
 
-static uint8_t z8000_zsp[256];
+typedef void (*opcode_func_t)(void);
+static Z8K_DATA uint8_t z8000_zsp[256];
 /* opcode -> table index, as 16-entry blocks (deduplicated) so it lives in RAM; see the end of this file */
 static uint16_t z8000_exec_idx[0x1000];
 static uint16_t z8000_exec_blk[];
+static opcode_func_t z8000_exec_fn[];
+static uint16_t z8000_exec_cyc[];
 #define Z8000_EXEC(op) (z8000_exec_blk[(z8000_exec_idx[(op) >> 4] << 4) | ((op) & 15)])
 #ifdef Z8K_PROFILE
 extern uint32_t z8k_op_count[600];
 #endif
 
-/* Fast memory path: the machine publishes a 256-entry page table of native-endian
- * 16-bit words for the active CPU (ROM and RAM); NULL pages fall back to z8k_rw(). */
+/* Fast memory path: the machine publishes 256-entry page tables of native-endian
+ * 16-bit words for the active CPU. The read table must map every page (filler for unmapped);
+ * NULL write pages fall back to z8k_ww()/z8k_wb(). */
 const uint16_t *const *z8k_rpage;
+uint16_t *const *z8k_wpage;
+/* Reads always go through the table (the machine maps every page, unmapped ones to a filler page)
+ * so that the opcode handlers are leaf functions. */
 static inline uint16_t z8k_rw_fast(uint32_t a)
 {
-    const uint16_t *p = z8k_rpage[(a >> 8) & 0xff];
-    if (p) return p[(a & 0xff) >> 1];
-    return z8k_rw(a);
+    return z8k_rpage[(a >> 8) & 0xff][(a & 0xff) >> 1];
+}
+static inline uint8_t z8k_rb_fast(uint32_t a)
+{
+    uint16_t w = z8k_rpage[(a >> 8) & 0xff][(a & 0xff) >> 1];
+    return (a & 1) ? (uint8_t)w : (uint8_t)(w >> 8);
+}
+static inline void z8k_ww_fast(uint32_t a, uint16_t v)
+{
+    uint16_t *p = z8k_wpage[(a >> 8) & 0xff];
+    if (p) p[(a & 0xff) >> 1] = v; else z8k_ww(a, v);
+}
+static inline void z8k_wb_fast(uint32_t a, uint8_t v)
+{
+    uint16_t *p = z8k_wpage[(a >> 8) & 0xff];
+    if (p) { uint16_t *w = &p[(a & 0xff) >> 1]; *w = (a & 1) ? (uint16_t)((*w & 0xff00) | v) : (uint16_t)((*w & 0x00ff) | (v << 8)); }
+    else z8k_wb(a, v);
 }
 
 #define BYTE_XOR_BE(a)  ((a) ^ 1)
@@ -220,12 +245,12 @@ static inline uint16_t z8k_rw_fast(uint32_t a)
 #define ASSERT_LINE 1
 
 /* bus: the space argument from MAME is ignored (Z8002 has one address space here) */
-#define RDMEM_B(sp, a)    z8k_rb((a) & 0xffff)
+#define RDMEM_B(sp, a)    z8k_rb_fast((a) & 0xffff)
 #define RDMEM_W(sp, a)    z8k_rw_fast((a) & 0xfffe)
 #define RDMEM_L(sp, a)    (((uint32_t)z8k_rw_fast((a) & 0xfffe) << 16) | z8k_rw_fast(((a) + 2) & 0xfffe))
-#define WRMEM_B(sp, a, v) z8k_wb((a) & 0xffff, (uint8_t)(v))
-#define WRMEM_W(sp, a, v) z8k_ww((a) & 0xfffe, (uint16_t)(v))
-#define WRMEM_L(sp, a, v) do { z8k_ww((a) & 0xfffe, (uint16_t)((v) >> 16)); z8k_ww(((a) + 2) & 0xfffe, (uint16_t)(v)); } while (0)
+#define WRMEM_B(sp, a, v) z8k_wb_fast((a) & 0xffff, (uint8_t)(v))
+#define WRMEM_W(sp, a, v) z8k_ww_fast((a) & 0xfffe, (uint16_t)(v))
+#define WRMEM_L(sp, a, v) do { z8k_ww_fast((a) & 0xfffe, (uint16_t)((v) >> 16)); z8k_ww_fast(((a) + 2) & 0xfffe, (uint16_t)(v)); } while (0)
 #define RDPORT_B(m, a)    z8k_in((a))
 #define RDPORT_W(m, a)    ((uint16_t)((z8k_in((a)) << 8) | z8k_in((a) + 1)))
 #define WRPORT_B(m, a, v) z8k_out((a), (uint8_t)(v))
@@ -237,14 +262,13 @@ static inline uint32_t addr_sub(uint32_t addr, uint32_t s) { return (addr & 0xff
 static inline uint16_t RDOP(void) { uint16_t r = z8k_rw_fast(Z->pc & 0xfffe); Z->pc += 2; return r; }
 static inline uint32_t get_operand(int opnum)
 {
+    if (opnum == 0) return Z->op[0];       /* always fetched by the run loop */
     if (!(Z->op_valid & (1 << opnum))) { Z->op[opnum] = z8k_rw_fast(Z->pc & 0xfffe); Z->pc += 2; Z->op_valid |= (1 << opnum); }
     return Z->op[opnum];
 }
 #define get_addr_operand(o) get_operand(o)
 #define get_raw_addr_operand(o) get_operand(o)
 
-typedef void (*opcode_func)(void);
-typedef struct { int beg, end, step; int size, cycles; opcode_func opcode; } Z8000_init;
 '''
 
 protos = '\n'.join(f'static void {n}(void);' for n in dict.fromkeys(names))
@@ -311,21 +335,25 @@ Z8K_HOT int z8k_run(z8k_t *cpu, int cycles_to_run)
 {
     Zs = *cpu;
     Z->icount = cycles_to_run;
+    const uint16_t *const *rp = z8k_rpage;
     do {
-        /* an NVI asserted while NVIE was clear becomes pending when it is enabled */
-        if (Z->irq_state[0] && (Z->fcw & F_NVIE)) Z->irq_req |= Z8000_NVI;
-        if (Z->irq_req) Interrupt();
-        Z->ppc = Z->pc;
-        if (Z->halt) { Z->icount = 0; break; }
-        Z->op[0] = RDOP();
+        if (__builtin_expect(Z->irq_req | Z->irq_state[0] | Z->halt, 0)) {
+            /* an NVI asserted while NVIE was clear becomes pending when it is enabled */
+            if (Z->irq_state[0] && (Z->fcw & F_NVIE)) Z->irq_req |= Z8000_NVI;
+            if (Z->irq_req) Interrupt();
+            if (Z->halt) { Z->icount = 0; break; }
+        }
+        uint32_t pc = Z->pc;
+        uint16_t op = rp[(pc >> 8) & 0xff][(pc & 0xff) >> 1];
+        Z->pc = pc + 2;
+        Z->op[0] = op;
         Z->op_valid = 1;
-        const Z8000_init *exec = &table[Z8000_EXEC(Z->op[0])];
+        unsigned idx = Z8000_EXEC(op);
 #ifdef Z8K_PROFILE
-        z8k_op_count[exec - table]++;
+        z8k_op_count[idx]++;
 #endif
-        Z->icount -= exec->cycles;
-        exec->opcode();
-        Z->op_valid = 0;
+        Z->icount -= z8000_exec_cyc[idx];
+        z8000_exec_fn[idx]();
     } while (Z->icount > 0);
     *cpu = Zs;
     return cycles_to_run - Z->icount;
@@ -345,10 +373,12 @@ for i in range(0, 0x10000, 16):
     if t not in blocks: blocks[t] = len(blocks)
     idx.append(blocks[t])
 blk_list = sorted(blocks.items(), key=lambda kv: kv[1])
-exec_c = 'static uint16_t z8000_exec_idx[0x1000] = {\n' + '\n'.join('    ' + ','.join(str(x) for x in idx[i:i+32]) + ',' for i in range(0, 0x1000, 32)) + '\n};\n'
-exec_c += 'static uint16_t z8000_exec_blk[%d] = {\n' % (len(blk_list) * 16) + '\n'.join('    ' + ','.join(str(x) for x in t) + ',' for t, _ in blk_list) + '\n};\n'
+exec_c = 'static Z8K_DATA uint16_t z8000_exec_idx[0x1000] = {\n' + '\n'.join('    ' + ','.join(str(x) for x in idx[i:i+32]) + ',' for i in range(0, 0x1000, 32)) + '\n};\n'
+exec_c += 'static Z8K_DATA uint16_t z8000_exec_blk[%d] = {\n' % (len(blk_list) * 16) + '\n'.join('    ' + ','.join(str(x) for x in t) + ',' for t, _ in blk_list) + '\n};\n'
 print(f'dispatch: {len(blk_list)} blocks, {len(blk_list) * 32 + 0x1000 * 2} bytes in RAM')
 
 names_c = '#ifdef Z8K_PROFILE\nstatic const char *const op_names[] = {\n' + ',\n'.join('    "%s"' % n for (_, _, _, _, _, n) in entries) + '\n};\nconst char *z8k_op_name(int i) { return (i >= 0 && i < %d) ? op_names[i] : "?"; }\n#endif\n' % len(entries)
-out.write_text(header + protos + '\n\n' + ops + '\n' + tbl + '\n' + interrupt + '\n' + exec_c + names_c)
+fn_c = 'static Z8K_DATA opcode_func_t z8000_exec_fn[%d] = {\n' % len(entries) + '\n'.join('    ' + ','.join(n for (_, _, _, _, _, n) in entries[i:i+8]) + ',' for i in range(0, len(entries), 8)) + '\n};\n'
+fn_c += 'static Z8K_DATA uint16_t z8000_exec_cyc[%d] = {\n' % len(entries) + '\n'.join('    ' + ','.join(c for (_, _, _, _, c, _) in entries[i:i+32]) + ',' for i in range(0, len(entries), 32)) + '\n};\n'
+out.write_text(header + protos + '\n\n' + ops + '\n' + interrupt + '\n' + exec_c + fn_c + names_c)
 print(f'wrote {out}: {len(entries)} table entries, {len(set(names))} opcode functions')
