@@ -11,6 +11,17 @@
 #include "polepos_roms.h"
 
 static uint8_t fb[PP_FB_W * PP_FB_H];
+extern uint32_t pp_dbg_sub_hist[2][0x10000];
+static void sub_top(int c)
+{
+    for (int k = 0; k < 6; k++) {
+        uint32_t best = 0; int bi = -1;
+        for (int i = 0; i < 0x10000; i++) if (pp_dbg_sub_hist[c][i] > best) { best = pp_dbg_sub_hist[c][i]; bi = i; }
+        if (bi < 0 || !best) break;
+        printf("    sub%d pc %04X: %u\n", c + 1, bi, best); pp_dbg_sub_hist[c][bi] = 0;
+    }
+    memset(pp_dbg_sub_hist[c], 0, sizeof(pp_dbg_sub_hist[c]));
+}
 extern uint32_t pp_dbg_irq, pp_dbg_nmi, pp_dbg_nvi, pp_dbg_n51r, pp_dbg_n53r, pp_dbg_adc_w, pp_dbg_adc_r, pp_dbg_pc_hist[0x10000];
 static void pc_top(void)
 {
@@ -104,6 +115,7 @@ int main(int argc, char **argv)
                    pp_pc(0), pp_pc(1), pp_pc(2), pp_latch());
             printf("    irq %u nmi %u nvi %u n51r %u n53r %u adc w/r %u/%u\n", pp_dbg_irq, pp_dbg_nmi, pp_dbg_nvi, pp_dbg_n51r, pp_dbg_n53r, pp_dbg_adc_w, pp_dbg_adc_r);
             if (getenv("PCTOP")) pc_top();
+            if (getenv("SUBTOP")) { sub_top(0); sub_top(1); }
         }
     }
     if (wav) {

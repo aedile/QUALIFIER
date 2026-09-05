@@ -1,0 +1,5 @@
+[mapping:emu]
+archive: libemu.a
+entries:
+    polepos (noflash)
+    Z80 (noflash)

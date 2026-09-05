@@ -10,6 +10,9 @@ from pathlib import Path
 
 src = Path(sys.argv[1])
 out = Path(sys.argv[2])
+# opcode handlers that should live in fast memory on the target (profiled with Z8K_PROFILE)
+hot_file = out.parent / 'hot_ops.txt'
+hot = set(hot_file.read_text().split()) if hot_file.exists() else set()
 ops = (src / 'z8000ops.hxx').read_text()
 tbl = (src / 'z8000tbl.hxx').read_text()
 
@@ -27,12 +30,17 @@ def strip_logs(text):
     return '\n'.join(res)
 
 ops = strip_logs(ops)
+ops = '\n'.join(l for l in ops.split('\n') if 'printf(' not in l)   # debug prints about segmented mode
 # drop the Z8001 (segmented) variants entirely
 ops = re.sub(r'^(?:uint\d+_t|int\d+_t|void|bool)\s+z8001_device::\w+\([^)]*\)\s*\{.*?^\}', '', ops, flags=re.M | re.S)
 # block-transfer ops pick an address space; there is only one here
 ops = re.sub(r'^\s*memory_access<[^>]*>::specific\s*&(\w+)\s*=[^;]*;', r'\tint \1 = 0; (void)\1;', ops, flags=re.M)
-# member function definitions -> static functions
-ops = re.sub(r'^(uint8_t|uint16_t|uint32_t|uint64_t|int8_t|int16_t|int32_t|void|bool)\s+z8002_device::(\w+)\(', r'static \1 \2(', ops, flags=re.M)
+# member function definitions -> static functions (hot ones get the Z8K_HOT placement attribute)
+def _fn(m):
+    ret, name = m.group(1), m.group(2)
+    attr = 'Z8K_HOT ' if name in hot else ''
+    return f'static {attr}{ret} {name}('
+ops = re.sub(r'^(uint8_t|uint16_t|uint32_t|uint64_t|int8_t|int16_t|int32_t|void|bool)\s+z8002_device::(\w+)\(', _fn, ops, flags=re.M)
 # spaces passed to RDMEM/WRMEM become dummy args
 ops = re.sub(r'\bm_(data|program|stack|io|sio)\b', '0', ops)
 ops = ops.replace('reg == SP ? 0 : 0', '0')
@@ -54,7 +62,7 @@ ops = re.sub(r'(static void zinvalid\(\)\s*\{)', r'\1 z8k_invalid_count++;', ops
 # table
 names = re.findall(r'&z8002_device::(\w+)', tbl)
 tbl = re.sub(r'&z8002_device::(\w+)', r'\1', tbl)
-tbl = tbl.replace('const z8002_device::Z8000_init z8002_device::table[] =', 'static const Z8000_init table[] =')
+tbl = tbl.replace('const z8002_device::Z8000_init z8002_device::table[] =', 'static Z8000_init table[] =')  # non-const so it lands in RAM
 tbl = strip_logs(tbl).replace('nullptr', '0')
 
 header = r'''/*
@@ -67,11 +75,36 @@ header = r'''/*
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#ifndef Z8K_HOT
+#define Z8K_HOT            /* placement attribute for hot handlers (IRAM_ATTR on the ESP32) */
+#endif
 
-static z8k_t *Z;
+static z8k_t Zs;               /* the CPU being run; z8k_run copies the caller's state in and out */
+#define Z (&Zs)
 uint32_t z8k_invalid_count;
+#ifdef Z8K_PROFILE
+uint32_t z8k_op_count[600];
+const char *z8k_op_name(int i);
+#endif
+
 static uint8_t z8000_zsp[256];
-static const uint16_t z8000_exec[0x10000];   /* defined at the end of this file */
+/* opcode -> table index, as 16-entry blocks (deduplicated) so it lives in RAM; see the end of this file */
+static uint16_t z8000_exec_idx[0x1000];
+static uint16_t z8000_exec_blk[];
+#define Z8000_EXEC(op) (z8000_exec_blk[(z8000_exec_idx[(op) >> 4] << 4) | ((op) & 15)])
+#ifdef Z8K_PROFILE
+extern uint32_t z8k_op_count[600];
+#endif
+
+/* Fast memory path: the machine publishes a 256-entry page table of native-endian
+ * 16-bit words for the active CPU (ROM and RAM); NULL pages fall back to z8k_rw(). */
+const uint16_t *const *z8k_rpage;
+static inline uint16_t z8k_rw_fast(uint32_t a)
+{
+    const uint16_t *p = z8k_rpage[(a >> 8) & 0xff];
+    if (p) return p[(a & 0xff) >> 1];
+    return z8k_rw(a);
+}
 
 #define BYTE_XOR_BE(a)  ((a) ^ 1)
 #define BYTE4_XOR_BE(a) ((a) ^ 3)
@@ -188,8 +221,8 @@ static const uint16_t z8000_exec[0x10000];   /* defined at the end of this file 
 
 /* bus: the space argument from MAME is ignored (Z8002 has one address space here) */
 #define RDMEM_B(sp, a)    z8k_rb((a) & 0xffff)
-#define RDMEM_W(sp, a)    z8k_rw((a) & 0xfffe)
-#define RDMEM_L(sp, a)    (((uint32_t)z8k_rw((a) & 0xfffe) << 16) | z8k_rw(((a) + 2) & 0xfffe))
+#define RDMEM_W(sp, a)    z8k_rw_fast((a) & 0xfffe)
+#define RDMEM_L(sp, a)    (((uint32_t)z8k_rw_fast((a) & 0xfffe) << 16) | z8k_rw_fast(((a) + 2) & 0xfffe))
 #define WRMEM_B(sp, a, v) z8k_wb((a) & 0xffff, (uint8_t)(v))
 #define WRMEM_W(sp, a, v) z8k_ww((a) & 0xfffe, (uint16_t)(v))
 #define WRMEM_L(sp, a, v) do { z8k_ww((a) & 0xfffe, (uint16_t)((v) >> 16)); z8k_ww(((a) + 2) & 0xfffe, (uint16_t)(v)); } while (0)
@@ -201,10 +234,10 @@ static const uint16_t z8000_exec[0x10000];   /* defined at the end of this file 
 
 static inline uint32_t addr_add(uint32_t addr, uint32_t addend) { return (addr & 0xffff0000) | ((addr + addend) & 0xffff); }
 static inline uint32_t addr_sub(uint32_t addr, uint32_t s) { return (addr & 0xffff0000) | ((addr - s) & 0xffff); }
-static inline uint16_t RDOP(void) { uint16_t r = z8k_rw(Z->pc & 0xfffe); Z->pc += 2; return r; }
+static inline uint16_t RDOP(void) { uint16_t r = z8k_rw_fast(Z->pc & 0xfffe); Z->pc += 2; return r; }
 static inline uint32_t get_operand(int opnum)
 {
-    if (!(Z->op_valid & (1 << opnum))) { Z->op[opnum] = z8k_rw(Z->pc & 0xfffe); Z->pc += 2; Z->op_valid |= (1 << opnum); }
+    if (!(Z->op_valid & (1 << opnum))) { Z->op[opnum] = z8k_rw_fast(Z->pc & 0xfffe); Z->pc += 2; Z->op_valid |= (1 << opnum); }
     return Z->op[opnum];
 }
 #define get_addr_operand(o) get_operand(o)
@@ -252,6 +285,8 @@ static void Interrupt(void)
     }
 }
 
+z8k_t *z8k_live(void) { return &Zs; }
+
 void z8k_init_tables(void)
 {
     for (int i = 0; i < 256; i++)
@@ -272,9 +307,9 @@ void z8k_set_nvi(z8k_t *cpu, int state)
     else { if (cpu->fcw & F_NVIE) cpu->irq_req |= Z8000_NVI; }
 }
 
-int z8k_run(z8k_t *cpu, int cycles_to_run)
+Z8K_HOT int z8k_run(z8k_t *cpu, int cycles_to_run)
 {
-    Z = cpu;
+    Zs = *cpu;
     Z->icount = cycles_to_run;
     do {
         /* an NVI asserted while NVIE was clear becomes pending when it is enabled */
@@ -284,11 +319,15 @@ int z8k_run(z8k_t *cpu, int cycles_to_run)
         if (Z->halt) { Z->icount = 0; break; }
         Z->op[0] = RDOP();
         Z->op_valid = 1;
-        const Z8000_init *exec = &table[z8000_exec[Z->op[0]]];
+        const Z8000_init *exec = &table[Z8000_EXEC(Z->op[0])];
+#ifdef Z8K_PROFILE
+        z8k_op_count[exec - table]++;
+#endif
         Z->icount -= exec->cycles;
         exec->opcode();
         Z->op_valid = 0;
     } while (Z->icount > 0);
+    *cpu = Zs;
     return cycles_to_run - Z->icount;
 }
 '''
@@ -300,10 +339,16 @@ for i, (beg, end, step, size, cyc, name) in enumerate(entries):
     b, e, st = int(beg, 16), int(end, 16), int(step)
     for v in range(b, e + 1, st):
         exec_tbl[v] = i
-lines = []
-for i in range(0, 0x10000, 32):
-    lines.append('    ' + ','.join(str(x) for x in exec_tbl[i:i+32]) + ',')
-exec_c = 'static const uint16_t z8000_exec[0x10000] = {\n' + '\n'.join(lines) + '\n};\n'
+blocks = {}; idx = []
+for i in range(0, 0x10000, 16):
+    t = tuple(exec_tbl[i:i+16])
+    if t not in blocks: blocks[t] = len(blocks)
+    idx.append(blocks[t])
+blk_list = sorted(blocks.items(), key=lambda kv: kv[1])
+exec_c = 'static uint16_t z8000_exec_idx[0x1000] = {\n' + '\n'.join('    ' + ','.join(str(x) for x in idx[i:i+32]) + ',' for i in range(0, 0x1000, 32)) + '\n};\n'
+exec_c += 'static uint16_t z8000_exec_blk[%d] = {\n' % (len(blk_list) * 16) + '\n'.join('    ' + ','.join(str(x) for x in t) + ',' for t, _ in blk_list) + '\n};\n'
+print(f'dispatch: {len(blk_list)} blocks, {len(blk_list) * 32 + 0x1000 * 2} bytes in RAM')
 
-out.write_text(header + protos + '\n\n' + ops + '\n' + tbl + '\n' + interrupt + '\n' + exec_c)
+names_c = '#ifdef Z8K_PROFILE\nstatic const char *const op_names[] = {\n' + ',\n'.join('    "%s"' % n for (_, _, _, _, _, n) in entries) + '\n};\nconst char *z8k_op_name(int i) { return (i >= 0 && i < %d) ? op_names[i] : "?"; }\n#endif\n' % len(entries)
+out.write_text(header + protos + '\n\n' + ops + '\n' + tbl + '\n' + interrupt + '\n' + exec_c + names_c)
 print(f'wrote {out}: {len(entries)} table entries, {len(set(names))} opcode functions')

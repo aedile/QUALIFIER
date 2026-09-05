@@ -8,6 +8,8 @@
 #include <string.h>
 
 static pp_roms_t R;
+static uint16_t rom_sub_w[2][0x4000];        /* sub ROMs as native-endian words */
+static const uint16_t *rpage_sub[2][256];    /* Z8002 read page tables (words) */
 static Z80 z80;
 static z8k_t sub[2];
 static int cur_sub;
@@ -26,9 +28,13 @@ static uint8_t sub_irq_mask;
 static uint8_t adc_done, adc_value;
 static uint32_t idle_cycles[3];
 static uint8_t n06_ctrl;
+static uint64_t (*time_src)(void);
+static pp_stats_t stats;
+#define TNOW() (time_src ? time_src() : 0)
 #ifdef PP_DEBUG
 #include <stdio.h>
 uint32_t pp_dbg_frame;
+uint32_t pp_dbg_sub_hist[2][0x10000];
 uint32_t pp_dbg_irq, pp_dbg_nmi, pp_dbg_nvi, pp_dbg_n51r, pp_dbg_n53r, pp_dbg_ctrlw, pp_dbg_adc_w, pp_dbg_adc_r, pp_dbg_pc_hist[0x10000];
 static void dbg_log_read(const char *what, uint8_t v) { static int n; if (pp_dbg_frame >= 322 && pp_dbg_frame < 328 && (n06_ctrl & 0x60) != 0x60 && n++ < 60) printf("  06XX %s -> %02X (z80 pc %04X)\n", what, v, z80.PC.W); }
 static int trace_n; static int cur_line_dbg;
@@ -280,11 +286,27 @@ static inline uint16_t *sub_ram_word(uint32_t a)
     if (a < 0xb000) return &pp_view16[(a - 0xa000) >> 1];
     return 0;
 }
+static void sub_pages_init(void)
+{
+    for (int c = 0; c < 2; c++) {
+        for (int i = 0; i < 0x4000; i++) {
+            const uint8_t *rom = c ? R.rom_sub2 : R.rom_sub1;
+            rom_sub_w[c][i] = (uint16_t)((rom[2 * i] << 8) | rom[2 * i + 1]);
+        }
+        memset(rpage_sub[c], 0, sizeof(rpage_sub[c]));
+        for (int pg = 0; pg < 0x80; pg++) rpage_sub[c][pg] = rom_sub_w[c] + (pg << 7);
+        for (int pg = 0x80; pg < 0x90; pg++) rpage_sub[c][pg] = pp_sprite16 + ((pg - 0x80) << 7);
+        for (int pg = 0x90; pg < 0x98; pg++) rpage_sub[c][pg] = pp_road16 + ((pg - 0x90) << 7);
+        for (int pg = 0x98; pg < 0xa0; pg++) rpage_sub[c][pg] = pp_alpha16 + ((pg - 0x98) << 7);
+        for (int pg = 0xa0; pg < 0xb0; pg++) rpage_sub[c][pg] = pp_view16 + ((pg - 0xa0) << 7);
+    }
+    z8k_rpage = rpage_sub[0];
+}
 uint16_t z8k_rw(uint32_t a)
 {
     a &= 0xfffe;
     DBG(if (0 && a >= 0x8090 && a <= 0x8094 && sub[cur_sub].pc != 0x34cc && sub[cur_sub].pc != 0x29c4 && sub[cur_sub].pc != 0x34c0 && sub[cur_sub].pc != 0x34c6 && sub[cur_sub].pc != 0x34c4 && sub[cur_sub].pc != 0x34ca && sub[cur_sub].pc != 0x29c8) { uint16_t *w = sub_ram_word(a); TRACE("sub%d rd %04X -> %04X (pc %04X)\n", cur_sub + 1, a, w ? *w : 0, sub[cur_sub].pc); })
-    if (a < 0x8000) { const uint8_t *rom = cur_sub ? R.rom_sub2 : R.rom_sub1; return (uint16_t)((rom[a] << 8) | rom[a + 1]); }
+    if (a < 0x8000) return rom_sub_w[cur_sub][a >> 1];
     uint16_t *w = sub_ram_word(a);
     return w ? *w : 0xffff;
 }
@@ -300,7 +322,7 @@ void z8k_ww(uint32_t a, uint16_t d)
     DBG(if (a >= 0x6000 && a < 0x8000) TRACE("sub%d NVI enable <- %d (pc %04X)\n", cur_sub + 1, d & 1, sub[cur_sub].pc);)
     if (a >= 0x6000 && a < 0x8000) {
         sub_irq_mask = d & 1;
-        if (!sub_irq_mask) z8k_set_nvi(&sub[cur_sub], 0);
+        if (!sub_irq_mask) z8k_set_nvi(z8k_live(), 0);      /* the writing CPU is the one running */
         return;
     }
     if (a >= 0xc000) { if (a & 0x100) pp_road_vscroll = d; else pp_hscroll = d; return; }
@@ -324,6 +346,7 @@ void pp_init(const pp_roms_t *r)
 {
     R = *r;
     z8k_init_tables();
+    sub_pages_init();
     pp_video_init(&R);
     pp_sound_init(&R);
     memset(nvram, 0xff, sizeof(nvram));
@@ -358,6 +381,7 @@ static void run_z80(int32_t cycles)
           if ((pc == 0x0000 || pc == 0x009b || pc == 0x0010) && reported < 8) { printf("  [f%u l%d] z80 RESTART at %04X, previous slice pc %04X, SP %04X, IFF %02X\n", pp_dbg_frame, cur_line_dbg, pc, prev_pc, z80.SP.W, z80.IFF); reported++; }
           prev_pc = pc; })
     if (z80.IFF & IFF_HALT) { idle_cycles[0] += cycles; return; }
+    if (z80.PC.W >= 0x0a5f && z80.PC.W <= 0x0a63 && !z80_irq_pending) { idle_cycles[0] += cycles; return; }   /* waits for the IRQ tick */
     z80.IPeriod = cycles; z80.ICount = cycles;
     RunZ80(&z80);
     int32_t over = cycles - z80.ICount;
@@ -370,7 +394,9 @@ static void run_sub(int i, int32_t cycles)
     if (cycles <= 0) { sub_debt[i] = -cycles; return; }
     if (sub[i].halt && !(sub[i].irq_req)) { idle_cycles[1 + i] += cycles; return; }
     cur_sub = i;
+    z8k_rpage = rpage_sub[i];
 #ifdef PP_DEBUG
+    pp_dbg_sub_hist[i][sub[i].pc & 0xffff]++;
     static int traced[2];
     if (getenv("TRACESUB") && traced[i] < 260) {
         int ran = 0;
@@ -397,15 +423,22 @@ void pp_run_frame(void)
             n06_nmi_countdown -= PP_CYCLES_PER_LINE;
             if (n06_nmi_countdown < 0) { n06_nmi_countdown += N06_NMI_PERIOD; IntZ80(&z80, INT_NMI); DBG(pp_dbg_nmi++;) }
         }
+        uint64_t t0 = TNOW();
         run_z80(PP_CYCLES_PER_LINE);
+        uint64_t t1 = TNOW();
         run_sub(0, PP_CYCLES_PER_LINE);
+        uint64_t t2 = TNOW();
         run_sub(1, PP_CYCLES_PER_LINE);
+        uint64_t t3 = TNOW();
+        stats.cpu_us[0] += t1 - t0; stats.cpu_us[1] += t2 - t1; stats.cpu_us[2] += t3 - t2;
     }
     frame_count++;
 }
 
 void pp_render(uint8_t *fb) { pp_video_render(fb); }
 void pp_render_audio(int16_t *buf, int samples, int rate) { pp_sound_render(buf, samples, rate); }
+void pp_set_time_source(uint64_t (*f)(void)) { time_src = f; }
+pp_stats_t *pp_stats(void) { return &stats; }
 uint16_t pp_pc(int c) { return c == 0 ? z80.PC.W : (uint16_t)sub[c - 1].pc; }
 uint32_t pp_frame_count(void) { return frame_count; }
 uint32_t pp_idle_cycles(int c) { uint32_t v = idle_cycles[c]; idle_cycles[c] = 0; return v; }

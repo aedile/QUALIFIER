@@ -56,6 +56,9 @@ const uint16_t *pp_palette(void);               /* 128 RGB565 entries */
 void pp_render_audio(int16_t *buf, int samples, int sample_rate);
 
 /* diagnostics */
+typedef struct { uint64_t cpu_us[3]; } pp_stats_t;
+void pp_set_time_source(uint64_t (*now_us)(void));   /* enables per-CPU host time accounting */
+pp_stats_t *pp_stats(void);
 uint16_t pp_pc(int cpu);          /* 0 = Z80, 1 = sub1, 2 = sub2 */
 uint32_t pp_frame_count(void);
 uint32_t pp_idle_cycles(int cpu); /* skipped cycles since last call */
