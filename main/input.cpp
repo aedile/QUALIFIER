@@ -2,7 +2,7 @@
  * input.cpp - medal controls for Pole Position (held sideways like a wheel)
  *   tilt (IMU) -> steering wheel
  *   BOOT button -> accelerator (full throttle)
- *   PWR button: tap (<0.3 s) -> gear change; hold 0.3-1.5 s and release -> coin; hold 2 s -> power off
+ *   PWR button: tap (<0.3 s) -> coin; hold 0.3-1.5 s and release -> gear change; hold 2 s -> power off
  */
 #include "input.h"
 #include "qmi8658.h"
@@ -20,18 +20,25 @@ static const char *TAG = "INPUT";
 #define PIN_BAT_EN   GPIO_NUM_15
 #define IMU_PERIOD_US 16000
 #define FULL_LOCK_DEG 30.0f       /* tilt for full wheel deflection */
+#define FULL_LOCK_COUNTS 12.0f    /* wheel counts at full deflection: 8 counts is already a hard swerve */
+#define DEADBAND_DEG 1.5f
 #define STEER_SIGN (+1.0f)
 
 static bool imu_ok, pwr_was_down;
 static int64_t pwr_down_since, imu_last_us, coin_until;
+static bool boot_was_down;
+uint32_t input_dbg_presses[2];           /* BOOT, PWR press edges since boot (diagnostics) */
+uint8_t input_dbg_levels;                /* raw levels: bit0 BOOT, bit1 PWR (1 = released) */
+int16_t input_dbg_accel[3]; float input_dbg_angle; uint8_t input_dbg_steer; uint8_t input_dbg_neutral;
 static float neutral_ang; static bool have_neutral;
 
 static float wheel_angle(void)
 {
     int16_t ax, ay, az;
     qmi8658_read_accel(&ax, &ay, &az);
-    /* held sideways: steering rotates gravity within the panel plane */
-    return atan2f((float)ay, (float)ax) * 57.2958f;
+    input_dbg_accel[0] = ax; input_dbg_accel[1] = ay; input_dbg_accel[2] = az;
+    /* rotating the medal like a wheel (any grip) rotates gravity within the panel plane */
+    return input_dbg_angle = atan2f((float)ay, (float)ax) * 57.2958f;
 }
 
 void input_init(void)
@@ -54,6 +61,10 @@ void input_update(pp_input_t *in)
     bool boot = gpio_get_level(PIN_BTN_BOOT) == 0;
     bool pwr = gpio_get_level(PIN_BTN_PWR) == 0;
 
+    if (boot && !boot_was_down) input_dbg_presses[0]++;
+    if (pwr && !pwr_was_down) input_dbg_presses[1]++;
+    input_dbg_levels = (uint8_t)((gpio_get_level(PIN_BTN_BOOT) ? 1 : 0) | (gpio_get_level(PIN_BTN_PWR) ? 2 : 0));
+    boot_was_down = boot;
     in->accel = boot ? 0x90 : 0;
     in->brake = 0;
     if (boot && !have_neutral && imu_ok) { neutral_ang = wheel_angle(); have_neutral = true; ESP_LOGI(TAG, "neutral wheel pose captured"); }
@@ -66,8 +77,12 @@ void input_update(pp_input_t *in)
     }
     if (!pwr && pwr_was_down) {
         int64_t held = now - pwr_down_since;
-        if (held < 300000) in->gear = !in->gear;
-        else if (held < 1500000) coin_until = now + 150000;
+        if (held < 300000) {
+            coin_until = now + 150000;
+            if (imu_ok) { neutral_ang = wheel_angle(); have_neutral = true; }   /* a coin also re-centres the wheel */
+            ESP_LOGI(TAG, "coin (wheel centred at %.1f)", (double)neutral_ang);
+        }
+        else if (held < 1500000) { in->gear = !in->gear; ESP_LOGI(TAG, "gear %s", in->gear ? "high" : "low"); }
     }
     pwr_was_down = pwr;
     in->coin1 = now < coin_until;
@@ -78,12 +93,15 @@ void input_update(pp_input_t *in)
             float d = wheel_angle() - neutral_ang;
             while (d > 180) d -= 360;
             while (d < -180) d += 360;
-            float v = 128.0f + STEER_SIGN * d * (127.0f / FULL_LOCK_DEG);
+            if (d > -DEADBAND_DEG && d < DEADBAND_DEG) d = 0;
+            float v = 128.0f + STEER_SIGN * d * (FULL_LOCK_COUNTS / FULL_LOCK_DEG);
             if (v < 0) v = 0;
             if (v > 255) v = 255;
             in->steer = (uint8_t)v;
         } else {
+            wheel_angle();                           /* keep the diagnostics live before the first throttle press */
             in->steer = 128;
         }
+        input_dbg_steer = in->steer; input_dbg_neutral = have_neutral;
     }
 }

@@ -95,11 +95,12 @@ extern "C" void app_main(void)
         vTaskDelay(1);
         if (now - last_report >= 5000000) {
             pp_stats_t *st = pp_stats();
-            ESP_LOGI(TAG, "5s: frames %lu drawn %lu skipped %lu dropped %lu; ms/s: emu %llu (z80 %llu sub1 %llu sub2 %llu) video %llu present %lu audio %llu; heap %lu; pc %04X %04X %04X latch %02X",
+            ESP_LOGI(TAG, "5s: frames %lu drawn %lu skipped %lu dropped %lu; ms/s: emu %llu (z80 %llu sub1 %llu sub2 %llu) video %llu present %lu audio %llu; heap %lu; pc %04X %04X %04X latch %02X; presses boot %lu pwr %lu levels %u; accel %d %d %d angle %.1f neutral %u steer %u",
                      (unsigned long)frames, (unsigned long)render_frames_drawn(), (unsigned long)skipped, (unsigned long)render_frames_dropped(),
                      (unsigned long long)(t_emu / 5000), (unsigned long long)(st->cpu_us[0] / 5000), (unsigned long long)(st->cpu_us[1] / 5000), (unsigned long long)(st->cpu_us[2] / 5000),
                      (unsigned long long)(t_video / 5000), (unsigned long)(render_present_us() / 5000), (unsigned long long)(t_audio / 5000),
-                     (unsigned long)esp_get_free_heap_size(), pp_pc(0), pp_pc(1), pp_pc(2), pp_latch());
+                     (unsigned long)esp_get_free_heap_size(), pp_pc(0), pp_pc(1), pp_pc(2), pp_latch(), (unsigned long)input_dbg_presses[0], (unsigned long)input_dbg_presses[1], input_dbg_levels,
+                     input_dbg_accel[0], input_dbg_accel[1], input_dbg_accel[2], (double)input_dbg_angle, input_dbg_neutral, input_dbg_steer);
 #ifdef PP_VIDEO_PROFILE
             ESP_LOGI(TAG, "video ms/s: clear %lu bg %lu road %lu sprites %lu text %lu",
                      (unsigned long)(pp_video_prof[0] / CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ / 5000), (unsigned long)(pp_video_prof[1] / CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ / 5000),

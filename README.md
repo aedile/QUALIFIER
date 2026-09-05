@@ -7,7 +7,7 @@ Like [PELLETINO](https://github.com/aedile/PELLETINO) (Pac-Man),
 [SWARMFIGHTER](https://github.com/aedile/SWARMFIGHTER) (Galaga), this is an
 emulator of the original arcade board running the original ROM code on a
 Waveshare ESP32-C6-LCD-1.69, the $20 module the San Antonio Fiesta medal is
-built around. Hold it sideways like a steering wheel and tilt to steer.
+built around. Hold it upright and turn it like a steering wheel to steer.
 
 ## The hardware being emulated
 
@@ -64,13 +64,18 @@ cd build_docker && python3 -m esptool --chip esp32c6 --port /dev/cu.usbmodem101 
 
 ## Playing
 
-Hold the medal sideways, screen in landscape, like a steering wheel.
+Hold the medal upright, screen facing you. The picture is shown pixel for
+pixel with black bars above and below (`ORIENTATION_PORTRAIT` in
+`main/render.cpp` switches to the sideways layout).
 
-* **Tilt** to steer. The level position is captured the first time you press
-  the accelerator, so hold it the way you want it and then floor it.
-* **BOOT button** is the accelerator.
-* **PWR button**, tap: shift between low and high gear. Hold for half a
-  second and release: insert a coin. Hold for two seconds: power off.
+* **Turn the medal** like a steering wheel to steer. The straight-ahead pose
+  is captured when you insert a coin and on the first press of the
+  accelerator, so hold it the way you want it first. About 30 degrees is
+  full lock.
+* **BOOT button** (middle) is the accelerator.
+* **PWR button** (side), tap: insert a coin (the race starts by itself). Hold
+  for half a second and release: shift between low and high gear. Hold for
+  two seconds: power off.
 
 DIP switches are set in `main/main.cpp` (`pp_set_dips`).
 
@@ -102,6 +107,9 @@ never heard of, is a lot for a single 160 MHz RISC-V core. What makes it fit:
   compiler quietly puts never-written statics, cost a third of the speed.
 * The Z80 spends most of its time polling a mailbox the Z8002s write to; the
   emulator recognises that loop and skips to the next event.
+* The steering wheel is an encoder the 53XX counts, and the game only follows
+  it one count per read. The tilt control's position is fed to it a count at
+  a time; handing it the position directly makes the game ignore the wheel.
 * The two Z8002s never idle, so their code is simply run as fast as possible,
   interleaved every four scanlines.
 * The engine filters, speech filter and noise generator are integer
