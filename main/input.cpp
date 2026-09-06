@@ -22,7 +22,7 @@ static const char *TAG = "INPUT";
 #define FULL_LOCK_DEG 30.0f       /* tilt for full wheel deflection */
 #define FULL_LOCK_COUNTS 12.0f    /* wheel counts at full deflection: 8 counts is already a hard swerve */
 #define DEADBAND_DEG 1.5f
-#define STEER_SIGN (+1.0f)
+#define STEER_SIGN (-1.0f)
 
 static bool imu_ok, pwr_was_down;
 static int64_t pwr_down_since, imu_last_us, coin_until;
