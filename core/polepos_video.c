@@ -182,6 +182,7 @@ uint32_t (*pp_video_clock)(void);
 #else
 #define VP(i)
 #endif
+int pp_render_mask = 0x0f;    /* bit0 background, bit1 road, bit2 sprites, bit3 text (diagnostics) */
 void pp_video_render(uint8_t *fb)
 {
 #ifdef PP_VIDEO_PROFILE
@@ -189,12 +190,12 @@ void pp_video_render(uint8_t *fb)
 #endif
     memset(fb, 0, PP_FB_W * PP_FB_H);
     VP(0);
-    draw_background(fb);
+    if (pp_render_mask & 1) draw_background(fb);
     VP(1);
-    draw_road(fb);
+    if (pp_render_mask & 2) draw_road(fb);
     VP(2);
-    draw_sprites(fb);
+    if (pp_render_mask & 4) draw_sprites(fb);
     VP(3);
-    draw_text(fb);
+    if (pp_render_mask & 8) draw_text(fb);
     VP(4);
 }

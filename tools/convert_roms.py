@@ -47,9 +47,10 @@ def decode(data, width, height, planes, xoff, yoff, inc_bits, count):
         for y in range(height):
             for x in range(width):
                 v = 0
+                # MAME's gfx_layout convention: planes[0] is the MOST significant bit of the pixel
                 for p, poff in enumerate(planes):
                     off = base + yoff[y] + xoff[x] + poff
-                    v |= ((data[off >> 3] >> (7 - (off & 7))) & 1) << p
+                    v |= ((data[off >> 3] >> (7 - (off & 7))) & 1) << (len(planes) - 1 - p)
                 out.append(v)
     return bytes(out)
 

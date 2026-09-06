@@ -76,6 +76,7 @@ int main(int argc, char **argv)
     pp_roms_t roms = { pp_rom_z80, pp_rom_sub1, pp_rom_sub2, pp_chars, pp_tiles, pp_sprites, pp_bigsprites,
                        pp_road, pp_scalelut, pp_proms, pp_wave, pp_engine, pp_voice };
     pp_init(&roms);
+    { extern int pp_render_mask; if (getenv("RENDERMASK")) pp_render_mask = (int)strtol(getenv("RENDERMASK"), NULL, 0); }
     pp_set_dips((uint8_t)dswa, (uint8_t)dswb);
 
     FILE *wav = NULL; const int rate = 20050; uint32_t wav_samples = 0;
