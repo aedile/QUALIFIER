@@ -17,6 +17,7 @@ extern "C" { extern uint32_t pp_video_prof[5]; extern uint32_t (*pp_video_clock)
 #include "render.h"
 #include "input.h"
 #include "audio_hal.h"
+#include "launcher_handback.h"
 
 static const char *TAG = "QUAL";
 #define DEBUG_LOG 1
@@ -24,6 +25,10 @@ static const int64_t FRAME_US = (int64_t)PP_CYCLES_PER_FRAME * 1000000 / PP_CPU_
 
 extern "C" void app_main(void)
 {
+    /* Before anything else: if we were chain-booted from the menu, make sure the
+     * next reset goes back to it rather than here. */
+    launcher_handback();
+
 #if !DEBUG_LOG
     esp_log_level_set("*", ESP_LOG_NONE);
 #endif
