@@ -21,6 +21,7 @@
  */
 #include "input.h"
 #include "medal_input.h"
+#include "medalboot.h"
 #include "qmi8658.h"
 #include "audio_hal.h"
 #include "esp_log.h"
@@ -54,6 +55,8 @@ void input_init(void)
     cfg.power_off_hold_us = 2000000;
     cfg.manual_pwr = true;            /* PWR has three bands here; see the header comment */
     cfg.mute_hold_us = 0;             /* BOOT is the throttle, so the mute is on both buttons */
+    cfg.exit_hold_us = MEDALBOOT_EXIT_HOLD_MS * 1000;   /* hold to leave for the menu */
+    cfg.on_exit = medalboot_exit_to_menu;
     medal_input_init(&cfg);
 }
 
