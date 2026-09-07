@@ -33,13 +33,27 @@ uint8_t input_dbg_levels;                /* raw levels: bit0 BOOT, bit1 PWR (1 =
 int16_t input_dbg_accel[3]; float input_dbg_angle; uint8_t input_dbg_steer; uint8_t input_dbg_neutral;
 static float neutral_ang; static bool have_neutral;
 
-static float wheel_angle(void)
+/* Returns false when the reading cannot be trusted: lying flat, gravity points straight out of
+ * the screen and the in-plane angle is noise, so a wheel centre captured there is one the driver
+ * was never holding. Nothing is captured or acted on until the medal is actually up. */
+static bool wheel_angle(float *deg)
 {
     int16_t ax, ay, az;
     qmi8658_read_accel(&ax, &ay, &az);
     input_dbg_accel[0] = ax; input_dbg_accel[1] = ay; input_dbg_accel[2] = az;
     /* rotating the medal like a wheel (any grip) rotates gravity within the panel plane */
-    return input_dbg_angle = atan2f((float)ay, (float)ax) * 57.2958f;
+    float in_plane = sqrtf((float)ax * ax + (float)ay * ay);
+    *deg = input_dbg_angle = atan2f((float)ay, (float)ax) * 57.2958f;
+    return in_plane > 1.2f * fabsf((float)az);      /* held up, not lying down */
+}
+
+static bool capture_neutral(void)
+{
+    float a;
+    if (!imu_ok || !wheel_angle(&a)) return false;   /* try again next time */
+    neutral_ang = a;
+    have_neutral = true;
+    return true;
 }
 
 void input_init(void)
@@ -87,7 +101,7 @@ void input_update(pp_input_t *in)
     boot_was_down = boot;
     in->accel = boot ? 0x90 : 0;
     in->brake = 0;
-    if (boot && !have_neutral && imu_ok) { neutral_ang = wheel_angle(); have_neutral = true; ESP_LOGI(TAG, "neutral wheel pose captured"); }
+    if (boot && !have_neutral && capture_neutral()) ESP_LOGI(TAG, "neutral wheel pose captured");
 
     if (pwr && !pwr_was_down) pwr_down_since = now;
     if (pwr && now - pwr_down_since >= 2000000) {
@@ -99,7 +113,7 @@ void input_update(pp_input_t *in)
         int64_t held = now - pwr_down_since;
         if (held < 300000) {
             coin_until = now + 150000;
-            if (imu_ok) { neutral_ang = wheel_angle(); have_neutral = true; }   /* a coin also re-centres the wheel */
+            capture_neutral();                       /* a coin also re-centres the wheel */
             ESP_LOGI(TAG, "coin (wheel centred at %.1f)", (double)neutral_ang);
         }
         else if (held < 1500000) { in->gear = !in->gear; ESP_LOGI(TAG, "gear %s", in->gear ? "high" : "low"); }
@@ -107,10 +121,12 @@ void input_update(pp_input_t *in)
     pwr_was_down = pwr;
     in->coin1 = now < coin_until;
 
-    if (imu_ok && now - imu_last_us >= IMU_PERIOD_US) {
-        imu_last_us = now;
-        if (have_neutral) {
-            float d = wheel_angle() - neutral_ang;
+    float ang;
+    bool imu_due = imu_ok && now - imu_last_us >= IMU_PERIOD_US;
+    if (imu_due) imu_last_us = now;
+    if (imu_due && wheel_angle(&ang)) {
+        if (have_neutral || capture_neutral()) {
+            float d = ang - neutral_ang;
             while (d > 180) d -= 360;
             while (d < -180) d += 360;
             if (d > -DEADBAND_DEG && d < DEADBAND_DEG) d = 0;
@@ -119,7 +135,6 @@ void input_update(pp_input_t *in)
             if (v > 255) v = 255;
             in->steer = (uint8_t)v;
         } else {
-            wheel_angle();                           /* keep the diagnostics live before the first throttle press */
             in->steer = 128;
         }
         input_dbg_steer = in->steer; input_dbg_neutral = have_neutral;
