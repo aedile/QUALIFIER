@@ -4,20 +4,18 @@
  * The battery rail, the buttons and the tilt zero live in components/medal_input, which every
  * medal shares. Pole Position takes two things into its own hands:
  *
- *   The PWR button has three bands, so medal_input's coin-then-start sequence is switched off
- *   (manual_pwr) and this reads the raw press lengths instead: a tap is a coin, a medium press
- *   changes gear, a long one powers off.
- *
- *   The sound gesture is on BOTH buttons rather than a long hold of BOOT, because here BOOT is
- *   the accelerator. You hold the throttle down for the whole of a lap, so the usual three
- *   second hold toggled the sound a few seconds into every single race.
+ *   The car drives itself forward. In Pole Position you hold the throttle down for the whole
+ *   race anyway, so making it automatic frees the BOOT button and lets every gesture match the
+ *   rest of the medals - which is the whole point, since holding BOOT for the throttle was the
+ *   one thing that made this game's controls different from all the others.
  *
  *   tilt (rotate it like a wheel) -> steering
- *   BOOT button                   -> accelerator (full throttle)
- *   PWR tap (<0.3 s)              -> coin
- *   PWR 0.3-1.5 s                 -> gear change
- *   PWR hold 2 s                  -> power off
- *   BOOT + PWR together, 1 s      -> sound off and on
+ *   accelerator                   -> automatic (held down for you)
+ *   BOOT tap                      -> shift gear (low <-> high)
+ *   BOOT hold 3 s                 -> sound off and on   (standard)
+ *   BOOT hold 10 s                -> back to the menu    (standard)
+ *   PWR short press               -> coin, then start    (standard)
+ *   PWR hold 1 s                  -> power off            (standard)
  */
 #include "input.h"
 #include "medal_input.h"
@@ -46,15 +44,20 @@ static void read_accel_dbg(int16_t *x, int16_t *y, int16_t *z)
     input_dbg_accel[0] = *x; input_dbg_accel[1] = *y; input_dbg_accel[2] = *z;
 }
 
+static void on_mute(void)
+{
+    audio_set_mute(!audio_get_mute());
+    ESP_LOGI(TAG, "sound %s", audio_get_mute() ? "off" : "on");
+}
+
 void input_init(void)
 {
     medal_input_config_t cfg = {};
     cfg.init_i2c = true;
     cfg.imu_init = qmi8658_init;
     cfg.read_accel = read_accel_dbg;
-    cfg.power_off_hold_us = 2000000;
-    cfg.manual_pwr = true;            /* PWR has three bands here; see the header comment */
-    cfg.mute_hold_us = 0;             /* BOOT is the throttle, so the mute is on both buttons */
+    cfg.mute_hold_us = 3000000;       /* BOOT is free now, so mute is the standard 3 s hold */
+    cfg.on_mute = on_mute;
     cfg.exit_hold_us = MEDALBOOT_EXIT_HOLD_MS * 1000;   /* hold to leave for the menu */
     cfg.on_exit = medalboot_exit_to_menu;
     medal_input_init(&cfg);
@@ -70,31 +73,17 @@ void input_update(pp_input_t *in)
     if (st.pwr && st.pwr_held_us == 0) input_dbg_presses[1]++;
     input_dbg_levels = (uint8_t)((st.boot ? 0 : 1) | (st.pwr ? 0 : 2));
 
-    in->accel = st.boot ? 0x90 : 0;
+    in->accel = 0x90;                /* automatic throttle - you hold it the whole race anyway */
     in->brake = 0;
 
-    /* sound: both buttons, held together */
-    bool both = st.boot && st.pwr;
-    if (both && !both_armed) { both_armed = true; both_fired = false; both_down_since = now; }
-    if (!both) both_armed = false;
-    if (both && !both_fired && now - both_down_since >= HOLD_MUTE_US) {
-        both_fired = true;
-        audio_set_mute(!audio_get_mute());
-        ESP_LOGI(TAG, "sound %s", audio_get_mute() ? "off" : "on");
+    /* a short tap of BOOT shifts gear; longer holds are mute (3 s) and exit (10 s), which
+     * medal_input handles, so only a genuine tap counts here */
+    if (st.boot_released && st.boot_release_held_us < 400000) {
+        in->gear = !in->gear;
+        ESP_LOGI(TAG, "gear %s", in->gear ? "high" : "low");
     }
 
-    if (st.pwr_released && !both_fired) {
-        int64_t held = st.pwr_release_held_us;
-        if (held < 300000) {
-            coin_until = now + 150000;
-            medal_input_recentre();                  /* a coin also re-centres the wheel */
-            ESP_LOGI(TAG, "coin (wheel re-centred)");
-        } else if (held < 1500000) {
-            in->gear = !in->gear;
-            ESP_LOGI(TAG, "gear %s", in->gear ? "high" : "low");
-        }
-    }
-    in->coin1 = now < coin_until;
+    in->coin1 = st.coin ? 1 : 0;     /* PWR short press; Pole Position free-play starts on the coin */
 
     if (st.tilt_valid) {
         float d = st.lr;
